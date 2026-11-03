@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>フィールドノート</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1f5f4a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FieldNote">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+<div id="crosshair" hidden></div>
+
+<!-- 上部ステータス -->
+<header id="status" class="glass">
+  <div id="status-main">
+    <span id="gps-dot" class="dot off"></span>
+    <span id="st-coord">位置情報を待機中…</span>
+  </div>
+  <div id="status-sub">
+    <span id="st-acc"></span>
+    <span id="st-elev"></span>
+    <span id="st-mesh"></span>
+  </div>
+  <div id="st-addr"></div>
+</header>
+
+<!-- 右側ボタン -->
+<nav id="fabs-right">
+  <button class="fab" id="btn-layers" title="地図の切替" aria-label="地図の切替">
+    <svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5Zm-7.5 8.6L2 13l10 5 10-5-2.5-1.4L12 15.5l-7.5-3.9Zm0 4.4L2 17.4l10 5 10-5-2.5-1.4-7.5 3.9-7.5-3.9Z"/></svg>
+  </button>
+  <button class="fab" id="btn-search" title="地名検索" aria-label="地名検索">
+    <svg viewBox="0 0 24 24"><path d="M10 3a7 7 0 1 0 4.2 12.6l5.1 5.1 1.4-1.4-5.1-5.1A7 7 0 0 0 10 3Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z"/></svg>
+  </button>
+  <button class="fab" id="btn-measure" title="距離・面積の計測" aria-label="計測">
+    <svg viewBox="0 0 24 24"><path d="M3 17.3 17.3 3 21 6.7 6.7 21 3 17.3Zm3.4-.6 1.4 1.4 1.1-1.1-1.4-1.4 1-1 2.1 2.1 1.1-1.1-2.1-2.1 1-1 1.4 1.4 1.1-1.1-1.4-1.4 1-1 2.1 2.1 1.1-1.1L15 9.7l1-1 1.4 1.4 1.1-1.1-2.8-2.8L5.3 15.6l1.1 1.1Z"/></svg>
+  </button>
+  <button class="fab" id="btn-track" title="軌跡の記録" aria-label="軌跡の記録">
+    <svg viewBox="0 0 24 24"><path d="M6 3a3 3 0 0 0-1 5.8V21h2V8.8A3 3 0 0 0 6 3Zm12 10a3 3 0 0 0-2.8 2H11c-1.1 0-2-.9-2-2s.9-2 2-2h4a4 4 0 0 0 0-8h-4v2h4a2 2 0 1 1 0 4h-4a4 4 0 0 0 0 8h4.2A3 3 0 1 0 18 13Z"/></svg>
+  </button>
+  <button class="fab" id="btn-crosshair" title="中心十字線" aria-label="中心十字線">
+    <svg viewBox="0 0 24 24"><path d="M11 2h2v6h-2V2Zm0 14h2v6h-2v-6ZM2 11h6v2H2v-2Zm14 0h6v2h-6v-2Z"/></svg>
+  </button>
+  <button class="fab" id="btn-locate" title="現在地（タップで追従）" aria-label="現在地">
+    <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 3h-2.1A7 7 0 0 0 13 5.1V3h-2v2.1A7 7 0 0 0 5.1 11H3v2h2.1a7 7 0 0 0 5.9 5.9V21h2v-2.1a7 7 0 0 0 5.9-5.9H21v-2Zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z"/></svg>
+  </button>
+</nav>
+
+<!-- 計測結果 -->
+<div id="measure-bar" class="glass" hidden>
+  <span id="measure-text">地図をタップして点を追加</span>
+  <button id="measure-undo" class="chip">1つ戻す</button>
+  <button id="measure-close" class="chip">終了</button>
+</div>
+
+<!-- 下部バー -->
+<footer id="bottombar" class="glass">
+  <button class="bb" id="btn-list"><svg viewBox="0 0 24 24"><path d="M4 6h2v2H4V6Zm4 0h12v2H8V6Zm-4 5h2v2H4v-2Zm4 0h12v2H8v-2Zm-4 5h2v2H4v-2Zm4 0h12v2H8v-2Z"/></svg><span>一覧<b id="memo-count"></b></span></button>
+  <button class="bb primary" id="btn-add-here"><svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg><span>現在地にメモ</span></button>
+  <button class="bb" id="btn-add-center"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg><span>中心にメモ</span></button>
+  <button class="bb" id="btn-menu"><svg viewBox="0 0 24 24"><path d="M5 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg><span>保存/設定<b id="unsaved-badge" hidden>!</b></span></button>
+</footer>
+
+<!-- ボトムシート（共通） -->
+<div id="sheet-backdrop" hidden></div>
+<section id="sheet" class="sheet" hidden aria-modal="true" role="dialog">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <h2 id="sheet-title"></h2>
+    <button id="sheet-close" class="icon-btn" aria-label="閉じる">✕</button>
+  </div>
+  <div id="sheet-body"></div>
+</section>
+
+<div id="toast" hidden></div>
+
+<!-- テンプレート -->
+<template id="tpl-memo-form">
+  <form id="memo-form" autocomplete="off">
+    <div class="loc-box">
+      <div class="loc-coord"></div>
+      <div class="loc-meta"></div>
+    </div>
+    <label>タイトル<input name="title" type="text" placeholder="例：旧街道の石碑" maxlength="200"></label>
+    <div class="lbl">カテゴリ<div class="cat-chips"></div></div>
+    <label>メモ<textarea name="note" rows="5" placeholder="観察内容・聞き取り・気づいたこと"></textarea></label>
+    <label>タグ（カンマ区切り）<input name="tags" type="text" placeholder="例：坂, 石垣, 明治"></label>
+    <div class="photo-row">
+      <label class="btn secondary file-btn">📷 写真を追加
+        <input name="photo" type="file" accept="image/*" capture="environment" multiple hidden>
+      </label>
+      <div class="photo-thumbs"></div>
+    </div>
+    <label class="inline"><input name="useHeading" type="checkbox"> 撮影方向（端末の向き）を記録 <span class="heading-val"></span></label>
+    <div class="form-actions">
+      <button type="button" class="btn danger" data-act="delete" hidden>削除</button>
+      <button type="button" class="btn secondary" data-act="move" hidden>位置を地図中心へ</button>
+      <button type="submit" class="btn primary">保存</button>
+    </div>
+  </form>
+</template>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
