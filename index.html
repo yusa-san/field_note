@@ -66,6 +66,7 @@
 <footer id="bottombar" class="glass">
   <button class="bb" id="btn-list"><svg viewBox="0 0 24 24"><path d="M4 6h2v2H4V6Zm4 0h12v2H8V6Zm-4 5h2v2H4v-2Zm4 0h12v2H8v-2Zm-4 5h2v2H4v-2Zm4 0h12v2H8v-2Z"/></svg><span>一覧<b id="memo-count"></b></span></button>
   <button class="bb primary" id="btn-add-here"><svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg><span>現在地にメモ</span></button>
+  <button class="bb cam" id="btn-camera" aria-label="撮影"><svg viewBox="0 0 24 24"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg><span>撮影</span></button>
   <button class="bb" id="btn-add-center"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg><span>中心にメモ</span></button>
   <button class="bb" id="btn-menu"><svg viewBox="0 0 24 24"><path d="M5 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg><span>保存/設定<b id="unsaved-badge" hidden>!</b></span></button>
 </footer>
@@ -82,6 +83,27 @@
 </section>
 
 <div id="toast" hidden></div>
+
+<!-- カメラ（撮影した写真は端末内に保存） -->
+<input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
+
+<!-- 写真ビューア -->
+<div id="viewer" hidden role="dialog" aria-modal="true" aria-label="写真">
+  <div id="v-stage"><img id="v-img" alt=""></div>
+  <div class="v-top">
+    <div class="v-info"><div id="v-title"></div><div id="v-meta"></div></div>
+    <button id="v-close" class="v-btn" aria-label="閉じる">✕</button>
+  </div>
+  <div class="v-bottom">
+    <button id="v-prev" class="v-btn" aria-label="前の写真">‹</button>
+    <span id="v-count"></span>
+    <button id="v-next" class="v-btn" aria-label="次の写真">›</button>
+    <span class="v-spacer"></span>
+    <button id="v-save" class="v-btn wide">保存</button>
+    <button id="v-map" class="v-btn wide">地図</button>
+    <button id="v-edit" class="v-btn wide">メモ</button>
+  </div>
+</div>
 
 <!-- テンプレート -->
 <template id="tpl-memo-form">
