@@ -161,13 +161,16 @@ const DB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const rq = indexedDB.open("fieldnote", 1);
+      const rq = indexedDB.open("fieldnote", 2);
       rq.onupgradeneeded = () => {
         const db = rq.result;
-        db.createObjectStore("memos", { keyPath: "id" });
-        const ph = db.createObjectStore("photos", { keyPath: "id" });
-        ph.createIndex("memoId", "memoId");
-        db.createObjectStore("tracks", { keyPath: "id" });
+        const has = (n) => db.objectStoreNames.contains(n);
+        if (!has("memos")) db.createObjectStore("memos", { keyPath: "id" });
+        if (!has("photos")) db.createObjectStore("photos", { keyPath: "id" }).createIndex("memoId", "memoId");
+        if (!has("tracks")) db.createObjectStore("tracks", { keyPath: "id" });
+        // v2: PDF から作った地図レイヤ（設定と画像を分けて保存し、透明度変更などで画像を書き直さない）
+        if (!has("overlays")) db.createObjectStore("overlays", { keyPath: "id" });
+        if (!has("overlayImages")) db.createObjectStore("overlayImages", { keyPath: "id" });
       };
       rq.onsuccess = () => res((this.db = rq.result));
       rq.onerror = () => rej(rq.error);
@@ -195,7 +198,7 @@ const DB = {
 };
 
 const Settings = {
-  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false },
+  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false, corsProxy: "" },
   load() {
     try {
       Object.assign(this.data, JSON.parse(localStorage.getItem("fn.settings") || "{}"));
@@ -308,7 +311,7 @@ function initMap() {
     S.thumbMode = tm;
     for (const id of S.memoThumb.keys()) { const m = S.memos.get(id); if (m) renderMarker(m); }
   });
-  S.map.on("click", (e) => S.measure && addMeasurePoint(e.latlng));
+  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng)));
   S.map.on("contextmenu", (e) => onLongPress(e.latlng));
   setupLongPress();
   return !saved; // 初回起動なら最初の測位位置へ移動する
@@ -613,6 +616,7 @@ function openLayers() {
   const body = h("div", {},
     h("div", { class: "sect-title" }, "ベース地図"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
+    h("div", { class: "sect-title" }, "PDF から追加した地図"), pdfLayersSection(),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),
   );
   openSheet("地図の切替", body, { backdrop: false, height: "62vh" });
@@ -1295,6 +1299,7 @@ async function buildJSON(photoMode = "none") {
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
+    overlays: await pdfLayersForExport(photoMode, files),
     files, // 呼び出し側で取り除く（JSON には書かない）
   };
 }
@@ -1599,8 +1604,9 @@ async function importData(data, getPhotoBlob) {
     Settings.data.project = data.project.name;
     Settings.save();
   }
+  const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
   await loadMemos();
-  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本`);
+  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / PDF 地図 ${oAdded} 枚` : ""}`);
 }
 
 /* ====================================================================
@@ -1685,9 +1691,11 @@ async function openMenu() {
   const cats = h("input", { type: "text", value: Settings.data.categories.join(", ") });
   const psize = h("select", {}, ...Object.entries(PHOTO_SIZES).map(([v, t]) => h("option", { value: v, selected: String(Settings.data.photoSize) === v }, t)));
   const openForm = h("input", { type: "checkbox", checked: !!Settings.data.cameraOpenForm });
+  const proxyIn = h("input", { type: "text", value: Settings.data.corsProxy || "", placeholder: "例：https://example.workers.dev/?url={url}", inputmode: "url" });
   const saveSettings = () => {
     Settings.data.photoSize = psize.value;
     Settings.data.cameraOpenForm = openForm.checked;
+    Settings.data.corsProxy = proxyIn.value.trim();
     Settings.data.project = proj.value.trim();
     Settings.data.observer = obs.value.trim();
     const c = cats.value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean);
@@ -1770,6 +1778,7 @@ async function openMenu() {
     h("label", {}, "カテゴリ（カンマ区切り・順に色が決まります）", cats),
     h("label", {}, "写真の保存サイズ（端末内）", psize),
     h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
+    h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn),
     h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存"),
 
     h("div", { class: "sect-title" }, "オフライン"),
@@ -2120,6 +2129,7 @@ async function main() {
   try {
     await resumeTrackIfAny();
     await loadMemos();
+    await loadPdfLayers();
   } catch (e) {
     alert("端末内の保存領域を開けませんでした（プライベートブラウズでは使えない場合があります）：" + e.message);
   }

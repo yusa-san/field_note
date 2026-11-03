@@ -27,7 +27,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html style.css app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
+          cp index.html style.css georef.js app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
