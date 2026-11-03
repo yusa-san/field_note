@@ -413,8 +413,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .voice-status { font-size: 12.5px; }
 .voice-status.warn { color: #9a5b00; }
 .audio-list { display: flex; flex-direction: column; gap: 4px; }
-.audio-row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
-.audio-row audio { width: 100%; height: 36px; }
+.audio-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.audio-row audio { flex: 1 1 100%; width: 100%; height: 36px; }
+.audio-row .audio-meta { flex: 1; }
+.audio-row .icon-mini { width: auto; padding: 0 10px; font-size: 13px; }
+.audio-job { font-size: 12.5px; color: var(--accent-2); margin: -2px 0 6px; }
 .audio-meta { font-size: 11.5px; color: var(--fg-2); white-space: nowrap; }
 .paudio audio { width: 220px; height: 34px; margin-top: 6px; }
 .paudio small { display: block; color: #666; }

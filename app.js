@@ -1917,11 +1917,16 @@ async function openMenu() {
   const cats = categoryManager(() => {});
   const psize = h("select", {}, ...Object.entries(PHOTO_SIZES).map(([v, t]) => h("option", { value: v, selected: String(Settings.data.photoSize) === v }, t)));
   const openForm = h("input", { type: "checkbox", checked: !!Settings.data.cameraOpenForm });
+  const asrSel = h("select", {}, h("option", { value: "auto", selected: !Settings.data.asrModel || Settings.data.asrModel === "auto" }, "自動（GPU が使える端末は高精度）"),
+    ...Object.entries(ASR_MODELS).map(([k, v]) => h("option", { value: k, selected: Settings.data.asrModel === k }, v.label)));
+  const autoTr = h("input", { type: "checkbox", checked: Settings.data.autoTranscribe !== false });
   const proxyIn = h("input", { type: "text", value: Settings.data.corsProxy || "", placeholder: "例：https://example.workers.dev/?url={url}", inputmode: "url" });
   const saveSettings = () => {
     Settings.data.photoSize = psize.value;
     Settings.data.cameraOpenForm = openForm.checked;
     Settings.data.corsProxy = proxyIn.value.trim();
+    Settings.data.asrModel = asrSel.value;
+    Settings.data.autoTranscribe = autoTr.checked;
     Settings.data.project = proj.value.trim();
     Settings.data.observer = obs.value.trim();
     Settings.save();
@@ -2002,6 +2007,8 @@ async function openMenu() {
     h("div", { class: "lbl-plain" }, "カテゴリ"), cats,
     h("label", {}, "写真の保存サイズ（端末内）", psize),
     h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
+    h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
+    h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "録音＋書き起こしで、その場で文字にできなかったときは録音後に自動で書き起こす"),
     h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn),
     h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存"),
 
