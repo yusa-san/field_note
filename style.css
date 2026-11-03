@@ -41,8 +41,6 @@ svg { fill: currentColor; }
 
 .glass {
   background: var(--glass);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
   box-shadow: var(--shadow);
 }
 
@@ -316,10 +314,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .v-btn.wide { font-size: 14px; padding: 0 14px; }
 
 /* PDF 地図レイヤ */
-.pdf-overlay {
-  position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none !important; max-height: none !important;
-  pointer-events: none; -webkit-user-select: none; user-select: none; image-rendering: auto;
-}
+.pdf-canvas { position: absolute; pointer-events: none; }
 .pdf-row { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 4px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .pdf-row .chips .chip { padding: 4px 10px; font-size: 12.5px; }

@@ -124,101 +124,203 @@ function georefFit(gcps, method) {
   return { M, inv: M3.inv(M), residuals: dof > 0 ? residuals : null, rms, n: pts.length, method };
 }
 
-/** 画像の四隅 (0,0)(w,0)(w,h)(0,h) → 画面上の4点 への射影行列（CSS matrix3d 用。単位正方形→四角形の閉形式） */
-function quadMatrix(w, hgt, quad) {
-  const [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = quad;
-  const dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3;
-  const dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3;
-  let g = 0, hh = 0;
-  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
-    const den = dx1 * dy2 - dx2 * dy1;
-    if (!den) return null;
-    g = (dx3 * dy2 - dx2 * dy3) / den;
-    hh = (dx1 * dy3 - dx3 * dy1) / den;
-  }
-  const sq = [x1 - x0 + g * x1, x3 - x0 + hh * x3, x0, y1 - y0 + g * y1, y3 - y0 + hh * y3, y0, g, hh, 1];
-  return M3.mul(sq, [1 / w, 0, 0, 0, 1 / hgt, 0, 0, 0, 1]);
-}
-const cssMatrix3d = (H) => `matrix3d(${H[0]},${H[3]},0,${H[6]},${H[1]},${H[4]},0,${H[7]},0,0,1,0,${H[2]},${H[5]},0,${H[8]})`;
-
 /* ====================================================================
- * 地図レイヤ（画像を matrix3d で変形して重ねる）
+ * 地図レイヤの描画
+ * 画面サイズの canvas に、パン・ズームが止まったときだけ描き直す（Leaflet の Canvas レンダラと同じ方式）。
+ * 巨大な画像要素を 3D 変形して重ねる方式は、スマホの GPU メモリを使い切ってちらつき・操作不能の原因になるため使わない。
  * ==================================================================== */
-const PdfImageLayer = L.Layer.extend({
-  initialize(rec, url, opts = {}) {
-    this.rec = rec;
-    this.url = url;
-    this.opts = opts;
+const PdfCanvas = L.Renderer.extend({
+  options: { padding: 0.3 },
+  initialize(options) {
+    L.Renderer.prototype.initialize.call(this, options);
+    this._items = [];
   },
-  onAdd(map) {
-    const paneName = this.opts.pane || `pdf-${this.rec.id}`;
-    this._pane = map.getPane(paneName) || map.createPane(paneName);
-    const img = (this._img = L.DomUtil.create("img", "pdf-overlay leaflet-zoom-animated"));
-    img.src = this.url;
-    img.alt = "";
-    img.draggable = false;
-    img.style.width = this.rec.width + "px";
-    img.style.height = this.rec.height + "px";
-    this._pane.appendChild(img);
-    this.applyStyle();
-    this._reset();
+  _initContainer() {
+    const c = (this._container = document.createElement("canvas"));
+    c.className = "pdf-canvas";
+    this._ctx = c.getContext("2d");
   },
-  onRemove() {
-    this._img.remove();
+  _destroyContainer() {
+    L.DomUtil.remove(this._container);
+    delete this._ctx;
   },
-  getEvents() {
-    return { zoom: this._reset, viewreset: this._reset, zoomanim: this._animateZoom };
+  _updatePaths() {},
+  _update() {
+    if (this._map._animatingZoom && this._bounds) return;
+    L.Renderer.prototype._update.call(this);
+    const b = this._bounds, size = b.getSize();
+    const m = (this._dpr = Math.min(window.devicePixelRatio || 1, 2));
+    L.DomUtil.setPosition(this._container, b.min);
+    this._container.width = Math.round(m * size.x);
+    this._container.height = Math.round(m * size.y);
+    this._container.style.width = size.x + "px";
+    this._container.style.height = size.y + "px";
+    this.redraw();
   },
-  setMatrix(M) {
-    this.rec.M = M;
-    if (this._map) this._reset();
+  add(item) {
+    if (!this._items.includes(item)) this._items.push(item);
+    item.renderer = this;
+    this.redrawSoon();
   },
-  corners() {
-    const { width: w, height: h, M } = this.rec;
-    return [[0, 0], [w, 0], [w, h], [0, h]].map(([u, v]) => { const [x, y] = M3.apply(M, u, v); return fromMerc(x, y); });
+  remove(item) {
+    this._items = this._items.filter((x) => x !== item);
+    this.redrawSoon();
   },
-  bounds() {
-    return L.latLngBounds(this.corners());
+  redrawSoon() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => { this._raf = 0; this.redraw(); });
   },
-  _place(pts) {
-    const H = quadMatrix(this.rec.width, this.rec.height, pts.map((p) => [p.x, p.y]));
-    if (H) this._img.style.transform = cssMatrix3d(H);
-  },
-  _reset() {
-    if (!this._map || !this.rec.M) return;
-    this._place(this.corners().map((ll) => this._map.latLngToLayerPoint(ll)));
-  },
-  _animateZoom(e) {
-    if (!this.rec.M) return;
-    this._place(this.corners().map((ll) => this._map._latLngToNewLayerPoint(ll, e.zoom, e.center)));
-  },
-  applyStyle() {
-    const r = this.rec;
-    if (!this._img) return;
-    this._img.style.opacity = r.opacity ?? 0.8;
-    this._img.style.filter = r.gray ? "grayscale(1) contrast(1.1)" : "";
-    // 白い背景を透かす（乗算）。ペインごと合成しないと下の地図と混ざらない
-    this._pane.style.mixBlendMode = r.multiply ? "multiply" : "";
-    this._pane.style.zIndex = String(this.opts.zIndex ?? 350 + Math.min(40, r.order || 0));
+  redraw() {
+    const ctx = this._ctx;
+    if (!ctx || !this._map || !this._bounds) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this._container.width, this._container.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    for (const it of [...this._items].sort((a, b) => (a.rec.order || 0) - (b.rec.order || 0))) {
+      if (!it.bmp || !it.rec.M) continue;
+      ctx.globalAlpha = it.rec.opacity ?? 0.8;
+      drawWarped(ctx, it, this._map, this._dpr, this._bounds.min);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
   },
 });
+
+/** 画像を変換行列どおりに描く。射影変換は格子に分けて各マスをアフィンで近似 */
+function drawWarped(ctx, it, map, m, origin) {
+  const { width: W, height: H, M } = it.rec;
+  const n = it.rec.method === "projective" ? 12 : 1;
+  const P = (u, v) => {
+    const [x, y] = M3.apply(M, u, v);
+    const p = map.latLngToLayerPoint(fromMerc(x, y));
+    return [p.x - origin.x, p.y - origin.y];
+  };
+  const g = [];
+  for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) g.push(P((i * W) / n, (j * H) / n));
+  const kx = it.bmp.width / W, ky = it.bmp.height / H;
+  const cw = W / n, ch = H / n, ov = n > 1 ? 1 : 0; // 格子の継ぎ目に隙間が出ないよう 1px 重ねる
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const p00 = g[j * (n + 1) + i], p10 = g[j * (n + 1) + i + 1], p01 = g[(j + 1) * (n + 1) + i];
+    const x0 = i * cw, y0 = j * ch;
+    const ax = (p10[0] - p00[0]) / cw, ay = (p10[1] - p00[1]) / cw, bx = (p01[0] - p00[0]) / ch, by = (p01[1] - p00[1]) / ch;
+    ctx.setTransform(m * ax, m * ay, m * bx, m * by, m * p00[0], m * p00[1]);
+    const l = Math.max(0, x0 - ov), t = Math.max(0, y0 - ov), r = Math.min(W, x0 + cw + ov), bt = Math.min(H, y0 + ch + ov);
+    ctx.drawImage(it.bmp, l * kx, t * ky, (r - l) * kx, (bt - t) * ky, l - x0, t - y0, r - l, bt - t);
+  }
+}
+
+/** 表示用の画像（モノクロ・白を透過を画素に焼き込んだもの）を用意する。設定が変わったときだけ作り直す */
+async function ensurePdfBitmap(it) {
+  const key = (it.rec.gray ? "g" : "") + (it.rec.multiply ? "w" : "");
+  if (it.bmp && it.bmpKey === key) return;
+  const token = (it._token = (it._token || 0) + 1);
+  let bmp;
+  try {
+    const base = await createImageBitmap(it.blob);
+    if (!key) bmp = base;
+    else {
+      const c = document.createElement("canvas");
+      c.width = base.width;
+      c.height = base.height;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(base, 0, 0);
+      base.close();
+      const STRIP = 200;
+      for (let y = 0; y < c.height; y += STRIP) {
+        const hh = Math.min(STRIP, c.height - y);
+        const id = ctx.getImageData(0, y, c.width, hh);
+        bakePixels(id.data, it.rec.gray, it.rec.multiply);
+        ctx.putImageData(id, 0, y);
+        if (token !== it._token) { c.width = c.height = 0; return; }
+        if ((y / STRIP) % 4 === 3) await new Promise((r) => setTimeout(r)); // 画面が固まらないよう少しずつ
+      }
+      bmp = await createImageBitmap(c);
+      c.width = c.height = 0;
+    }
+  } catch (e) {
+    console.warn("PDF 地図の画像を用意できません", e);
+    return;
+  }
+  if (token !== it._token) { bmp.close(); return; }
+  if (it.bmp) it.bmp.close();
+  it.bmp = bmp;
+  it.bmpKey = key;
+  if (it.renderer) it.renderer.redrawSoon();
+}
+function bakePixels(d, gray, white) {
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    if (white) {
+      // 白に近いほど透明に（紙の白い背景を消して下の地図を見せる）
+      const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      d[i + 3] = mn >= 245 ? 0 : mn <= 200 ? d[i + 3] : ((245 - mn) * 255) / 45;
+    }
+    if (gray) {
+      let y = 0.299 * r + 0.587 * g + 0.114 * b;
+      y = (y - 128) * 1.1 + 128;
+      d[i] = d[i + 1] = d[i + 2] = y < 0 ? 0 : y > 255 ? 255 : y;
+    }
+  }
+}
+function releasePdfBitmap(it) {
+  it._token = (it._token || 0) + 1;
+  if (it.bmp) it.bmp.close();
+  it.bmp = null;
+  it.bmpKey = null;
+}
+
+/** 1 枚の PDF 地図（表示用データ） */
+function makePdfItem(rec, blob) {
+  return {
+    rec, blob, bmp: null, bmpKey: null, renderer: null,
+    corners() {
+      const { width: w, height: h, M } = this.rec;
+      return [[0, 0], [w, 0], [w, h], [0, h]].map(([u, v]) => { const [x, y] = M3.apply(M, u, v); return fromMerc(x, y); });
+    },
+    bounds() { return L.latLngBounds(this.corners()); },
+  };
+}
 
 /* ====================================================================
  * 保存済みレイヤの管理（メイン地図）
  * ==================================================================== */
-const PDFL = { items: new Map() }; // id -> { rec, layer, url }
+const PDFL = { items: new Map(), renderer: null }; // id -> item
+
+function pdfRenderer() {
+  if (!PDFL.renderer) {
+    const pane = S.map.createPane("pdfPane");
+    pane.style.zIndex = 350;
+    pane.style.pointerEvents = "none"; // 地図やボタンの操作を邪魔しない
+    PDFL.renderer = new PdfCanvas({ pane: "pdfPane" }).addTo(S.map);
+  }
+  return PDFL.renderer;
+}
+function showPdfItem(it) {
+  pdfRenderer().add(it);
+  ensurePdfBitmap(it);
+}
+function hidePdfItem(it) {
+  if (PDFL.renderer) PDFL.renderer.remove(it);
+  releasePdfBitmap(it); // 非表示の地図はメモリを解放
+}
+/** 表示設定（透明度・モノクロ・白を透過）を反映 */
+function refreshPdfItem(it) {
+  if (it.rec.visible === false) return;
+  ensurePdfBitmap(it);
+  if (PDFL.renderer) PDFL.renderer.redrawSoon();
+}
 
 async function loadPdfLayers() {
-  for (const it of PDFL.items.values()) { if (it.layer) S.map.removeLayer(it.layer); URL.revokeObjectURL(it.url); }
+  for (const it of PDFL.items.values()) hidePdfItem(it);
   PDFL.items.clear();
   const recs = (await DB.all("overlays")).sort((a, b) => (a.order || 0) - (b.order || 0));
   for (const rec of recs) {
     const img = await DB.get("overlayImages", rec.id);
     if (!img) continue;
-    const url = URL.createObjectURL(img.blob);
-    const layer = new PdfImageLayer(rec, url);
-    if (rec.visible !== false) layer.addTo(S.map);
-    PDFL.items.set(rec.id, { rec, layer, url });
+    const it = makePdfItem(rec, img.blob);
+    PDFL.items.set(rec.id, it);
+    if (rec.visible !== false) showPdfItem(it);
   }
 }
 
@@ -234,16 +336,15 @@ function setPdfVisible(id, on) {
   const it = PDFL.items.get(id);
   if (!it) return;
   it.rec.visible = on;
-  if (on) it.layer.addTo(S.map);
-  else S.map.removeLayer(it.layer);
+  if (on) showPdfItem(it);
+  else hidePdfItem(it);
   savePdfRecSoon(it.rec);
 }
 
 async function deletePdfLayer(id) {
   const it = PDFL.items.get(id);
   if (!it) return;
-  S.map.removeLayer(it.layer);
-  URL.revokeObjectURL(it.url);
+  hidePdfItem(it);
   PDFL.items.delete(id);
   await DB.del("overlays", id);
   await DB.del("overlayImages", id);
@@ -288,12 +389,12 @@ function pdfLayersSection() {
       rg.oninput = () => {
         r.opacity = Number(rg.value);
         if (r.visible === false) { cb.checked = true; setPdfVisible(r.id, true); }
-        it.layer.applyStyle();
+        refreshPdfItem(it);
         savePdfRecSoon(r);
       };
       const toggle = (key, label) => {
         const c = h("button", { type: "button", class: "chip" + (r[key] ? " on" : "") }, label);
-        c.onclick = () => { r[key] = !r[key]; c.classList.toggle("on", !!r[key]); it.layer.applyStyle(); savePdfRecSoon(r); };
+        c.onclick = () => { r[key] = !r[key]; c.classList.toggle("on", !!r[key]); refreshPdfItem(it); savePdfRecSoon(r); };
         return c;
       };
       const act = (label, fn) => h("button", { type: "button", class: "chip", onclick: fn }, label);
@@ -302,7 +403,7 @@ function pdfLayersSection() {
           h("div", {}, r.title || "PDF 地図", h("small", {}, [`p.${r.page}`, r.sourceName, r.fit?.rms != null ? `誤差 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("・"))), rg),
         h("div", { class: "chips" },
           toggle("gray", "モノクロ"), toggle("multiply", "白を透過"),
-          act("範囲へ", () => { closeSheet(true); setFollow(false); if (r.visible === false) setPdfVisible(r.id, true); S.map.fitBounds(it.layer.bounds(), { padding: [20, 20] }); }),
+          act("範囲へ", () => { closeSheet(true); setFollow(false); if (r.visible === false) setPdfVisible(r.id, true); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }),
           act("位置合わせ", () => { closeSheet(true); openGeoref({ existing: r.id }); }),
           act("名前・出典", () => openPdfLayerEdit(r.id)),
           act("削除", async () => { if (!confirm(`「${r.title}」を削除しますか？`)) return; await deletePdfLayer(r.id); render(); }))));
@@ -730,9 +831,22 @@ function grGeoref({ rec, blob, isNew, src }) {
     // 重ねて確認
     if (prevBtn.classList.contains("on") && fit && fit.M) {
       const r2 = { ...rec, M: fit.M, opacity: 0.6, multiply: true };
-      if (!preview) preview = new PdfImageLayer(r2, url, { pane: "grPreview", zIndex: 350 }).addTo(gmap);
-      else { preview.rec = r2; preview.applyStyle(); preview._reset(); }
-    } else if (preview) { gmap.removeLayer(preview); preview = null; }
+      if (!preview) {
+        const pane = gmap.getPane("grPreview") || gmap.createPane("grPreview");
+        pane.style.zIndex = 350;
+        pane.style.pointerEvents = "none";
+        preview = { renderer: new PdfCanvas({ pane: "grPreview" }).addTo(gmap), item: makePdfItem(r2, blob) };
+        preview.renderer.add(preview.item);
+        ensurePdfBitmap(preview.item);
+      } else {
+        preview.item.rec = r2;
+        preview.renderer.redrawSoon();
+      }
+    } else if (preview) {
+      releasePdfBitmap(preview.item);
+      gmap.removeLayer(preview.renderer);
+      preview = null;
+    }
   };
 
   // タップで点を置く
@@ -783,7 +897,7 @@ function grGeoref({ rec, blob, isNew, src }) {
     URL.revokeObjectURL(url);
     await loadPdfLayers();
     const it = PDFL.items.get(out.id);
-    if (it) { setFollow(false); S.map.fitBounds(it.layer.bounds(), { padding: [20, 20] }); }
+    if (it) { setFollow(false); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }
     toast(isNew ? "PDF 地図を追加しました（地図の切替で表示を調整できます）" : "位置合わせを更新しました");
     if (src && src.pdf && isNew && confirm("同じ PDF の別のページも追加しますか？")) openPdfPages(src);
     else if (src && src.pdf) src.pdf.destroy();
