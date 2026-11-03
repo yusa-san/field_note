@@ -557,7 +557,7 @@ function pdfLayerClick(latlng) {
     const el = h("div", {},
       h("div", { class: "pt" }, r.title || "PDF 地図"),
       h("div", { class: "ps" }, [`p.${r.page}`, r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("　")),
-      link ? h("div", { style: "margin-top:4px;word-break:break-all" }, h("a", { href: link, target: "_blank", rel: "noopener" }, "元の PDF を開く ↗")) : h("div", { class: "ps" }, "（出典 URL 未登録）"),
+      link ? h("div", { style: "margin-top:4px;word-break:break-all" }, h("a", { href: link, target: "_blank", rel: "noopener" }, "元の PDF を開く")) : h("div", { class: "ps" }, "（出典 URL 未登録）"),
       h("div", { class: "pa" },
         h("button", { type: "button", onclick: () => { S.map.closePopup(); setPdfVisible(r.id, false); toast("非表示にしました（地図の切替から戻せます）"); } }, "非表示"),
         h("button", { type: "button", onclick: () => { S.map.closePopup(); openPdfLayerEdit(r.id); } }, "名前・出典"),
@@ -705,7 +705,7 @@ function openPdfSource(prefillUrl = "") {
         h("div", {}, "サイト側が他のページからの読み込みを許可していないためです。次の手順で読み込めます（URL は出典リンクとして保存されます）。"),
         h("ol", {}, h("li", {}, "下のボタンで PDF を開き、端末にダウンロード"), h("li", {}, "「ダウンロードした PDF を選ぶ」でそのファイルを選択")),
         h("div", { class: "menu-grid" },
-          h("a", { class: "btn secondary", href: u, target: "_blank", rel: "noopener" }, "PDF を開く ↗"),
+          h("a", { class: "btn secondary", href: u, target: "_blank", rel: "noopener" }, "PDF を開く"),
           h("button", { class: "btn primary", type: "button", onclick: () => fileIn.click() }, "ダウンロードした PDF を選ぶ"))));
     }
   };
