@@ -40,7 +40,10 @@ const OVERLAYS = [
 ];
 
 const PALETTE = ["#2e7d32", "#6d4c41", "#5e35b1", "#1565c0", "#00838f", "#c62828", "#ef6c00", "#ad1457", "#558b2f", "#616161"];
-const DEFAULT_CATEGORIES = ["景観", "建物・構造物", "地形", "石碑・標識", "聞き取り", "要確認", "その他"];
+const DEFAULT_CATEGORIES = ["景観", "建物・構造物", "地形", "石碑・標識", "聞き取り", "要確認", "写真", "その他"];
+const PHOTO_CATEGORY = "写真";
+const PHOTO_SIZES = { original: "元のまま（画質・EXIF を保持）", 2560: "長辺 2560px に縮小", 1600: "長辺 1600px に縮小（容量節約）" };
+const THUMB_ZOOM = 15; // これ以上のズームで写真付きメモをサムネイル表示
 const DEFAULT_VIEW = { lat: 35.681, lon: 139.767, z: 13 };
 const PREFETCH_LIMIT = 1500;
 
@@ -192,7 +195,7 @@ const DB = {
 };
 
 const Settings = {
-  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null },
+  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false },
   load() {
     try {
       Object.assign(this.data, JSON.parse(localStorage.getItem("fn.settings") || "{}"));
@@ -221,6 +224,8 @@ const S = {
   meMarker: null, accCircle: null,
   memos: new Map(), markers: new Map(),
   thumbUrls: new Map(),
+  memoThumb: new Map(), // memoId -> 先頭の写真レコード（地図のサムネイル用）
+  thumbMode: false,
   track: null, trackLine: null, wakeLock: null,
   shownTracks: new Map(),
   measure: null,
@@ -296,6 +301,13 @@ function initMap() {
   });
   S.map.on("move", () => S.crosshair && updateStatusCoordOnly());
   S.map.on("dragstart", () => setFollow(false));
+  S.thumbMode = S.map.getZoom() >= THUMB_ZOOM;
+  S.map.on("zoomend", () => {
+    const tm = S.map.getZoom() >= THUMB_ZOOM;
+    if (tm === S.thumbMode) return;
+    S.thumbMode = tm;
+    for (const id of S.memoThumb.keys()) { const m = S.memos.get(id); if (m) renderMarker(m); }
+  });
   S.map.on("click", (e) => S.measure && addMeasurePoint(e.latlng));
   S.map.on("contextmenu", (e) => onLongPress(e.latlng));
   setupLongPress();
@@ -613,10 +625,20 @@ async function loadMemos() {
   const list = await DB.all("memos");
   S.memos.clear();
   for (const m of list) S.memos.set(m.id, m);
+  S.memoThumb.clear();
+  for (const ph of await DB.all("photos")) {
+    const cur = S.memoThumb.get(ph.memoId);
+    if (!cur || (ph.order ?? 0) < (cur.order ?? 0)) S.memoThumb.set(ph.memoId, ph);
+  }
   for (const mk of S.markers.values()) S.map.removeLayer(mk);
   S.markers.clear();
   for (const m of S.memos.values()) renderMarker(m);
   updateCounts();
+}
+async function refreshMemoThumb(id) {
+  const ph = (await DB.byIndex("photos", "memoId", id)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (ph.length) S.memoThumb.set(id, ph[0]);
+  else S.memoThumb.delete(id);
 }
 function nextNo() {
   let mx = 0;
@@ -635,11 +657,18 @@ function updateCounts() {
 function renderMarker(m) {
   const old = S.markers.get(m.id);
   if (old) S.map.removeLayer(old);
-  const icon = L.divIcon({
-    className: "memo-pin", iconSize: [26, 26], iconAnchor: [13, 30], popupAnchor: [0, -28],
-    html: `<div style="background:${catColor(m.category)}"><span>${m.no ?? ""}</span></div>`,
-  });
-  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true }).addTo(S.map);
+  const color = catColor(m.category);
+  const ph = S.memoThumb.get(m.id);
+  const icon = ph && S.thumbMode
+    ? L.divIcon({
+      className: "photo-pin", iconSize: [48, 48], iconAnchor: [24, 58], popupAnchor: [0, -56],
+      html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${m.heading != null ? `<i style="transform:rotate(${m.heading}deg)">▲</i>` : ""}</div>`,
+    })
+    : L.divIcon({
+      className: "memo-pin", iconSize: [26, 26], iconAnchor: [13, 30], popupAnchor: [0, -28],
+      html: `<div style="background:${color}"><span>${m.no ?? ""}</span></div>`,
+    });
+  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: ph ? 100 : 0 }).addTo(S.map);
   mk.bindPopup("", { maxWidth: 260, autoPanPaddingTopLeft: [10, 110], autoPanPaddingBottomRight: [60, 90] });
   mk.on("popupopen", (e) => {
     const cur = S.memos.get(m.id) || m;
@@ -671,17 +700,18 @@ async function loadPopupThumb(m, el, popup) {
   const box = el.querySelector(".pthumb");
   if (!box || !photos.length) return;
   photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const img = h("img", { src: thumbUrl(photos[0]), alt: "" });
+  const img = h("img", { src: thumbUrl(photos[0]), alt: "写真（タップで拡大）" });
   img.onload = () => popup.isOpen() && popup.update();
+  img.onclick = () => openViewer(photos.map((photo) => ({ photo, memo: m })), 0);
   box.replaceChildren(img);
-  if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚`));
+  if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚（タップで表示）`));
 }
 function thumbUrl(p) {
   if (!S.thumbUrls.has(p.id)) S.thumbUrls.set(p.id, URL.createObjectURL(p.thumb || p.blob));
   return S.thumbUrls.get(p.id);
 }
 
-/** 写真を縮小して JPEG Blob に（大きな原画像はそのまま保存しない） */
+/** 画像を読み込む（EXIF の向きはブラウザが補正する） */
 function loadImage(file) {
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file);
@@ -699,12 +729,27 @@ function drawScaled(img, maxPx, q) {
   c.getContext("2d").drawImage(img, 0, 0, w, hh);
   return new Promise((res) => c.toBlob((b) => res({ blob: b, w, h: hh }), "image/jpeg", q));
 }
-async function processPhoto(file) {
+const extOf = (mime) => ({ "image/png": "png", "image/webp": "webp" }[mime] || "jpg");
+/**
+ * 写真を端末内保存用に整える。
+ * size = "original" なら元ファイルをそのまま（EXIF 付き）保存、数値なら長辺をその px に縮小した JPEG。
+ * どちらも一覧・地図用の小さなサムネイルを別に作る。
+ */
+async function processPhoto(file, size = Settings.data.photoSize) {
   const { img, url } = await loadImage(file);
   try {
-    const full = await drawScaled(img, 1600, 0.82);
-    const th = await drawScaled(img, 320, 0.7);
-    return { blob: full.blob, thumb: th.blob, width: full.w, height: full.h, takenAt: new Date(file.lastModified || Date.now()).toISOString(), origName: file.name };
+    const th = await drawScaled(img, 360, 0.72);
+    let full;
+    if (String(size) === "original" && /^image\/(jpeg|png|webp)$/.test(file.type)) {
+      // カメラの一時ファイルが消えても困らないよう、中身をコピーして保持する
+      full = { blob: new Blob([await file.arrayBuffer()], { type: file.type }), w: img.naturalWidth, h: img.naturalHeight };
+    } else {
+      full = await drawScaled(img, Number(size) || 2560, 0.85);
+    }
+    return {
+      blob: full.blob, mime: full.blob.type || "image/jpeg", thumb: th.blob, width: full.w, height: full.h, bytes: full.blob.size,
+      takenAt: new Date(file.lastModified || Date.now()).toISOString(), origName: file.name || null,
+    };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -717,7 +762,13 @@ async function processPhoto(file) {
  */
 async function openMemoForm(existing, loc) {
   const isNew = !existing;
-  const memo = existing ? { ...existing } : {
+  const memo = existing ? { ...existing } : newMemo(loc);
+  let saved = !isNew;
+  let dirty = false;
+  return memoForm(memo, isNew, saved, dirty);
+}
+function newMemo(loc) {
+  return {
     id: uuid(), no: nextNo(), createdAt: nowIso(), updatedAt: nowIso(),
     lat: loc.lat, lon: loc.lon, source: loc.source,
     accuracy: loc.source === "gps" && S.pos ? Math.round(S.pos.acc * 10) / 10 : null,
@@ -726,8 +777,8 @@ async function openMemoForm(existing, loc) {
     title: "", note: "", category: Settings.data.categories[0], tags: [], heading: null,
     baseMap: S.baseId, project: Settings.data.project || null, observer: Settings.data.observer || null,
   };
-  let saved = !isNew;
-  let dirty = false;
+}
+async function memoForm(memo, isNew, saved, dirty) {
 
   const frag = $("#tpl-memo-form").content.cloneNode(true);
   const form = frag.querySelector("form");
@@ -820,7 +871,12 @@ async function openMemoForm(existing, loc) {
         dirty = true;
         renderThumbs();
       };
-      thumbs.append(h("div", { class: "thumb" }, h("img", { src: thumbUrl(p), alt: "" }), del));
+      const im = h("img", { src: thumbUrl(p), alt: "" });
+      im.onclick = () => {
+        const all = existingPhotos.filter((x) => !removed.has(x.id)).concat(newPhotos);
+        openViewer(all.map((photo) => ({ photo, memo })), all.indexOf(p), { readonly: true });
+      };
+      thumbs.append(h("div", { class: "thumb" }, im, del));
     }
   };
   renderThumbs();
@@ -881,6 +937,7 @@ async function openMemoForm(existing, loc) {
     }
     saved = true;
     S.memos.set(memo.id, memo);
+    await refreshMemoThumb(memo.id);
     renderMarker(memo);
     updateCounts();
     closeSheet(true);
@@ -898,6 +955,7 @@ async function deleteMemo(id) {
   for (const p of photos) await DB.del("photos", p.id);
   await DB.del("memos", id);
   S.memos.delete(id);
+  S.memoThumb.delete(id);
   const mk = S.markers.get(id);
   if (mk) S.map.removeLayer(mk);
   S.markers.delete(id);
@@ -919,7 +977,7 @@ function addMemoCenter() {
 }
 
 /* ---------- メモ一覧 ---------- */
-let listState = { q: "", cat: "", sort: "new" };
+let listState = { q: "", cat: "", sort: "new", view: "list" };
 let listRefresh = null;
 function openList() {
   const q = h("input", { type: "search", placeholder: "キーワードで絞り込み", value: listState.q });
@@ -929,8 +987,20 @@ function openList() {
     h("option", { value: "no", selected: listState.sort === "no" }, "番号順"),
     h("option", { value: "near", selected: listState.sort === "near" }, "近い順"));
   const list = h("div");
+  const tabList = h("button", { type: "button", class: "chip" }, "リスト");
+  const tabPhotos = h("button", { type: "button", class: "chip" }, "写真");
+  let allPhotos = null;
+  DB.all("photos").then((ps) => {
+    allPhotos = ps;
+    tabPhotos.textContent = `写真（${ps.length}）`;
+    if (listState.view === "photos") render();
+  });
+  tabList.onclick = () => { listState.view = "list"; render(); };
+  tabPhotos.onclick = () => { listState.view = "photos"; render(); };
   const render = () => {
-    listState = { q: q.value.trim(), cat: cat.value, sort: sort.value };
+    listState = { q: q.value.trim(), cat: cat.value, sort: sort.value, view: listState.view };
+    tabList.classList.toggle("on", listState.view === "list");
+    tabPhotos.classList.toggle("on", listState.view === "photos");
     let arr = Array.from(S.memos.values());
     if (listState.cat) arr = arr.filter((m) => m.category === listState.cat);
     if (listState.q) {
@@ -942,8 +1012,9 @@ function openList() {
     else if (listState.sort === "no") arr.sort((a, b) => (a.no || 0) - (b.no || 0));
     else arr.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
     list.replaceChildren();
+    if (listState.view === "photos") return renderGallery(list, arr, allPhotos);
     if (!arr.length) {
-      list.append(h("div", { class: "empty" }, S.memos.size ? "該当するメモがありません" : "まだメモがありません。下の「現在地にメモ」から記録できます。"));
+      list.append(h("div", { class: "empty" }, S.memos.size ? "該当するメモがありません" : "まだメモがありません。下の「現在地にメモ」「撮影」から記録できます。"));
       return;
     }
     for (const m of arr) {
@@ -974,13 +1045,31 @@ function openList() {
   sort.onchange = render;
   render();
   listRefresh = render;
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort), list), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort), list), {
     onClose: () => (listRefresh = null),
   });
 }
+function renderGallery(box, memos, allPhotos) {
+  if (!allPhotos) return box.append(h("div", { class: "empty" }, "読み込み中…"));
+  const byMemo = new Map();
+  for (const p of allPhotos) {
+    if (!byMemo.has(p.memoId)) byMemo.set(p.memoId, []);
+    byMemo.get(p.memoId).push(p);
+  }
+  const items = [];
+  for (const m of memos) for (const photo of (byMemo.get(m.id) || []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) items.push({ photo, memo: m });
+  if (!items.length) return box.append(h("div", { class: "empty" }, "写真はまだありません。下の「撮影」ボタンで撮影できます。"));
+  const grid = h("div", { class: "gal" });
+  items.forEach((it, i) => {
+    const tile = h("button", { type: "button", class: "gal-tile" }, h("img", { src: thumbUrl(it.photo), alt: "", loading: "lazy" }), h("b", { style: `background:${catColor(it.memo.category)}` }, `#${it.memo.no ?? ""}`));
+    tile.onclick = () => openViewer(items, i);
+    grid.append(tile);
+  });
+  box.append(grid);
+}
 let listRefreshTimer;
 function refreshListDistancesSoon() {
-  if (!listRefresh || listRefreshTimer) return;
+  if (!listRefresh || listRefreshTimer || listState.view === "photos") return;
   listRefreshTimer = setTimeout(() => {
     listRefreshTimer = null;
     listRefresh && listRefresh();
@@ -1179,15 +1268,23 @@ const memoOut = (m) => {
   return rest;
 };
 
-async function buildJSON(includePhotos) {
+/**
+ * 全データの JSON を作る。
+ * photoMode: "none" = 写真はファイル名のみ / "dataUrl" = base64 で埋め込む / "file" = ZIP 用（files に実体を返す）
+ */
+async function buildJSON(photoMode = "none") {
   const memos = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0));
   const out = [];
+  const files = [];
   for (const m of memos) {
     const ph = (await DB.byIndex("photos", "memoId", m.id)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const photos = [];
     for (const [i, p] of ph.entries()) {
-      const o = { id: p.id, filename: `memo${String(m.no).padStart(3, "0")}_${i + 1}.jpg`, mime: "image/jpeg", width: p.width, height: p.height, takenAt: p.takenAt };
-      if (includePhotos) o.dataUrl = await blobToDataURL(p.blob);
+      const mime = p.mime || p.blob.type || "image/jpeg";
+      const filename = `memo${String(m.no).padStart(3, "0")}_${i + 1}.${extOf(mime)}`;
+      const o = { id: p.id, filename, file: `photos/${filename}`, mime, width: p.width, height: p.height, bytes: p.blob.size, takenAt: p.takenAt, origName: p.origName || null };
+      if (photoMode === "dataUrl") o.dataUrl = await blobToDataURL(p.blob);
+      if (photoMode === "file") files.push({ path: o.file, blob: p.blob, date: new Date(p.takenAt || m.createdAt) });
       photos.push(o);
     }
     out.push({ ...memoOut(m), photos });
@@ -1198,12 +1295,18 @@ async function buildJSON(includePhotos) {
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
+    files, // 呼び出し側で取り除く（JSON には書かない）
   };
 }
-function buildGeoJSON(tracks) {
+async function buildJSONText(photoMode) {
+  const { files, ...data } = await buildJSON(photoMode);
+  return JSON.stringify(data, null, 1);
+}
+function buildGeoJSON(tracks, photoFiles) {
   const features = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0)).map((m) => {
     const { lat, lon, ...props } = memoOut(m);
-    return { type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: { ...props, tags: (m.tags || []).join(","), photoCount: m.photoCount || 0 } };
+    const extra = photoFiles ? { photos: (photoFiles.get(m.id) || []).join(";") } : {};
+    return { type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: { ...props, tags: (m.tags || []).join(","), photoCount: m.photoCount || 0, ...extra } };
   });
   for (const t of tracks) {
     if (t.points.length < 2) continue;
@@ -1215,14 +1318,16 @@ function buildGeoJSON(tracks) {
   }
   return { type: "FeatureCollection", name: Settings.data.project || "fieldnote", features };
 }
-function buildCSV() {
+function buildCSV(photoFiles) {
   const cols = ["no", "title", "category", "note", "tags", "lat", "lon", "accuracy", "elevation", "address", "mesh", "heading", "source", "photoCount", "createdAt", "updatedAt", "id"];
+  if (photoFiles) cols.splice(cols.indexOf("photoCount") + 1, 0, "photos");
   const q = (v) => {
     v = Array.isArray(v) ? v.join(";") : v ?? "";
     v = String(v);
     return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   };
-  const rows = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0)).map((m) => cols.map((c) => q(m[c])).join(","));
+  const rows = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0))
+    .map((m) => cols.map((c) => q(c === "photos" ? photoFiles.get(m.id) || [] : m[c])).join(","));
   return "﻿" + [cols.join(","), ...rows].join("\r\n"); // BOM 付き（Excel で文字化けしないように）
 }
 function buildGPX(tracks) {
@@ -1237,9 +1342,12 @@ function buildGPX(tracks) {
 function safeName(s) {
   return (s || "").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
 }
-async function deliverFile(text, ext, mime, mode) {
-  const name = `fieldnote_${safeName(Settings.data.project) ? safeName(Settings.data.project) + "_" : ""}${stamp()}.${ext}`;
-  const blob = new Blob([text], { type: mime });
+const exportBaseName = () => `fieldnote_${safeName(Settings.data.project) ? safeName(Settings.data.project) + "_" : ""}${stamp()}`;
+function deliverFile(text, ext, mime, mode) {
+  return deliverBlob(new Blob([text], { type: mime }), `${exportBaseName()}.${ext}`, mime, mode);
+}
+/** ファイルを端末に渡す。mode = "download"（保存）/ "share"（OS の共有シート） */
+async function deliverBlob(blob, name, mime, mode) {
   if (mode === "share") {
     // 一部ブラウザは JSON 等の共有を拒否するので text/plain でも試す（拡張子は保つ）
     const file = [mime, "text/plain"].map((t) => new File([blob], name, { type: t })).find((f) => navigator.canShare && navigator.canShare({ files: [f] }));
@@ -1273,11 +1381,12 @@ async function doExport(kind, mode, includePhotos) {
   try {
     const tracks = await DB.all("tracks");
     let ok;
-    if (kind === "json") ok = await deliverFile(JSON.stringify(await buildJSON(includePhotos), null, 1), "json", "application/json", mode);
+    if (kind === "zip") ok = await exportZip(mode);
+    else if (kind === "json") ok = await deliverFile(await buildJSONText(includePhotos ? "dataUrl" : "none"), "json", "application/json", mode);
     else if (kind === "geojson") ok = await deliverFile(JSON.stringify(buildGeoJSON(tracks)), "geojson", "application/geo+json", mode);
     else if (kind === "csv") ok = await deliverFile(buildCSV(), "csv", "text/csv", mode);
     else if (kind === "gpx") ok = await deliverFile(buildGPX(tracks), "gpx", "application/gpx+xml", mode);
-    if (ok && kind === "json") {
+    if (ok && (kind === "json" || kind === "zip")) {
       Settings.data.lastExportAt = nowIso();
       Settings.save();
       updateCounts();
@@ -1287,13 +1396,39 @@ async function doExport(kind, mode, includePhotos) {
   }
 }
 
-async function importJSON(file) {
+/** JSON / GeoJSON / ZIP（このアプリの書き出し）を読み込んで統合する */
+async function importFile(file) {
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  if (head[0] === 0x50 && head[1] === 0x4b) return importZip(file);
   let data;
   try {
     data = JSON.parse(await file.text());
   } catch {
     return alert("JSON として読み込めませんでした");
   }
+  return importData(data, async () => null);
+}
+async function importZip(file) {
+  let z, data, base;
+  try {
+    z = await readZip(file);
+    const names = z.names.filter((n) => !n.startsWith("__MACOSX/"));
+    const jsonName = names.find((n) => /(^|\/)data\.json$/.test(n)) || names.find((n) => n.endsWith(".json"));
+    if (!jsonName) return alert("ZIP の中に data.json が見つかりません");
+    base = jsonName.slice(0, jsonName.lastIndexOf("/") + 1);
+    data = JSON.parse(await (await z.get(jsonName)).text());
+  } catch (e) {
+    return alert("ZIP を読み込めませんでした：" + e.message);
+  }
+  toast("ZIP を読み込み中…", 60000);
+  return importData(data, async (p) => {
+    const path = p.file || (p.filename ? `photos/${p.filename}` : null);
+    if (!path) return null;
+    const b = await z.get(base + path);
+    return b ? new Blob([b], { type: p.mime || (/\.png$/i.test(path) ? "image/png" : /\.webp$/i.test(path) ? "image/webp" : "image/jpeg") }) : null;
+  });
+}
+async function importData(data, getPhotoBlob) {
   let memos = data.memos;
   // GeoJSON（このアプリが書き出したもの）も受け付ける
   if (!memos && data.type === "FeatureCollection") {
@@ -1318,11 +1453,12 @@ async function importJSON(file) {
     let cnt = cur ? cur.photoCount || 0 : 0;
     if (Array.isArray(ph)) {
       for (const [i, p] of ph.entries()) {
-        if (!p.dataUrl) continue;
         try {
-          const blob = await (await fetch(p.dataUrl)).blob();
-          const pr = await processPhoto(new File([blob], p.filename || "photo.jpg", { type: blob.type }));
-          await DB.put("photos", { id: p.id || uuid(), memoId: m.id, order: i, ...pr, blob, takenAt: p.takenAt || pr.takenAt });
+          const blob = (await getPhotoBlob(p)) || (p.dataUrl ? await (await fetch(p.dataUrl)).blob() : null);
+          if (!blob) continue;
+          // 書き出し済みの写真はそのまま保存（再圧縮しない）。サムネイルだけ作り直す
+          const pr = await processPhoto(new File([blob], p.filename || "photo.jpg", { type: blob.type || p.mime || "image/jpeg" }), "original");
+          await DB.put("photos", { id: p.id || uuid(), memoId: m.id, order: i, ...pr, takenAt: p.takenAt || pr.takenAt, origName: p.origName || pr.origName });
           photos++;
         } catch {}
       }
@@ -1412,17 +1548,17 @@ async function openMenu() {
   } catch {}
   const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(["x"], "x.txt", { type: "text/plain" })] }));
 
-  const inclPhotos = h("input", { type: "checkbox", checked: true });
+  const inclPhotos = h("input", { type: "checkbox" });
   const exportRow = (label, kind) => h("div", { class: "menu-grid" },
     h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "download", inclPhotos.checked) }, `${label} を保存`),
     canShare ? h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "share", inclPhotos.checked) }, `${label} を共有…`) : h("span"));
 
-  const fileIn = h("input", { type: "file", accept: ".json,.geojson,application/json", hidden: true });
+  const fileIn = h("input", { type: "file", accept: ".zip,.json,.geojson,application/zip,application/json", hidden: true });
   fileIn.onchange = async () => {
     const f = fileIn.files[0];
     fileIn.value = "";
     if (f) {
-      await importJSON(f);
+      await importFile(f);
       closeSheet(true);
     }
   };
@@ -1430,7 +1566,11 @@ async function openMenu() {
   const proj = h("input", { type: "text", value: Settings.data.project, placeholder: "例：犬山城下町 2026秋" });
   const obs = h("input", { type: "text", value: Settings.data.observer, placeholder: "例：山田" });
   const cats = h("input", { type: "text", value: Settings.data.categories.join(", ") });
+  const psize = h("select", {}, ...Object.entries(PHOTO_SIZES).map(([v, t]) => h("option", { value: v, selected: String(Settings.data.photoSize) === v }, t)));
+  const openForm = h("input", { type: "checkbox", checked: !!Settings.data.cameraOpenForm });
   const saveSettings = () => {
+    Settings.data.photoSize = psize.value;
+    Settings.data.cameraOpenForm = openForm.checked;
     Settings.data.project = proj.value.trim();
     Settings.data.observer = obs.value.trim();
     const c = cats.value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean);
@@ -1480,24 +1620,28 @@ async function openMenu() {
   const last = Settings.data.lastExportAt;
   const body = h("div", {},
     h("dl", { class: "kv" },
-      h("dt", {}, "メモ"), h("dd", {}, `${S.memos.size} 件（写真 ${photoCount} 枚）`),
+      h("dt", {}, "メモ"), h("dd", {}, `${S.memos.size} 件`),
+      h("dt", {}, "写真"), h("dd", {}, `${photoCount} 枚`),
       h("dt", {}, "軌跡"), h("dd", {}, `${tracks.length} 本`),
       h("dt", {}, "最終書き出し"), h("dd", {}, last ? fmtDate(last) : "なし"),
       h("dt", {}, "端末内の容量"), h("dd", {}, usage || "—")),
 
     h("div", { class: "sect-title" }, "書き出し（端末のファイルへ）"),
-    h("label", { class: "inline", style: "margin:4px 0 8px;font-size:14px" }, inclPhotos, "JSON に写真を含める（ファイルが大きくなります）"),
+    exportRow("ZIP（JSON＋写真）", "zip"),
+    h("p", { class: "note" }, "ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。写真は端末内に保存したものをそのまま入れます。"),
+    h("div", { style: "height:6px" }),
     exportRow("JSON（全データ）", "json"),
+    h("label", { class: "inline", style: "margin:6px 0 4px;font-size:14px" }, inclPhotos, "JSON に写真を埋め込む（base64・ファイルが大きくなります）"),
     h("div", { style: "height:6px" }),
     exportRow("GeoJSON", "geojson"),
     h("div", { style: "height:6px" }),
     exportRow("CSV", "csv"),
     h("div", { style: "height:6px" }),
     exportRow("GPX", "gpx"),
-    h("p", { class: "note" }, "JSON はこのアプリで再読み込みできる完全なバックアップです。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
+    h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
 
     h("div", { class: "sect-title" }, "読み込み"),
-    h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "JSON / GeoJSON を読み込む（統合）"), fileIn,
+    h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON を読み込む（統合）"), fileIn,
     h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。"),
 
     h("div", { class: "sect-title" }, "軌跡"),
@@ -1507,6 +1651,8 @@ async function openMenu() {
     h("label", {}, "調査名（ファイル名とメモに記録）", proj),
     h("label", {}, "記録者", obs),
     h("label", {}, "カテゴリ（カンマ区切り・順に色が決まります）", cats),
+    h("label", {}, "写真の保存サイズ（端末内）", psize),
+    h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
     h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存"),
 
     h("div", { class: "sect-title" }, "オフライン"),
@@ -1533,9 +1679,263 @@ async function openMenu() {
     } }, "全データを削除"),
 
     h("p", { class: "note", style: "margin-top:16px" },
-      "使い方：画面の長押しでその地点にメモ／✚ ボタンで中心十字線を表示し、十字線の位置にメモ。座標は WGS84（世界測地系）の緯度経度。標高は地理院の標高 API（DEM）による値で、GPS高度とは別に記録されます。"),
+      "使い方：画面の長押しでその地点にメモ／✚ ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は地理院の標高 API（DEM）による値で、GPS高度とは別に記録されます。"),
   );
   openSheet("保存・設定", body);
+}
+
+/* ====================================================================
+ * カメラ：撮影するとその場所に写真メモを作り、写真は端末内（IndexedDB）に保存
+ * ==================================================================== */
+let camCtx = null;
+function startCamera() {
+  // ボタンを押した時点の状況も控えておく（撮影から戻ったときに GPS が無い場合の予備）
+  camCtx = { pos: S.pos ? { ...S.pos } : null, heading: S.heading, center: S.map.getCenter(), t: Date.now() };
+  $("#camera-input").click(); // ユーザー操作の中で同期的に呼ぶ必要がある
+  const DOE = window.DeviceOrientationEvent;
+  if (!orientationStarted && !(DOE && typeof DOE.requestPermission === "function")) startOrientation();
+}
+
+async function onCameraPhotos() {
+  const input = $("#camera-input");
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length) return;
+  const ctx = camCtx || { center: S.map.getCenter() };
+  const fresh = S.pos && Date.now() - S.pos.t < 60000 ? S.pos : null;
+  const p = fresh || ctx.pos;
+  const loc = p ? { lat: p.lat, lon: p.lon, source: "gps" } : { lat: ctx.center.lat, lon: ctx.center.lng, source: "map" };
+  if (!p) toast("現在地が取れていないため、地図の中心に記録します");
+
+  toast("写真を保存中…", 20000);
+  const memo = newMemo(loc);
+  if (p) {
+    memo.accuracy = Math.round(p.acc * 10) / 10;
+    memo.gpsAltitude = p.alt != null ? Math.round(p.alt * 10) / 10 : null;
+  }
+  memo.kind = "photo";
+  memo.category = PHOTO_CATEGORY;
+  const hd = S.heading ?? ctx.heading;
+  memo.heading = hd != null ? Math.round(hd) : null;
+  const photos = [];
+  try {
+    for (const [i, f] of files.entries()) photos.push({ id: uuid(), memoId: memo.id, order: i, ...(await processPhoto(f)) });
+    memo.photoCount = photos.length;
+    for (const ph of photos) await DB.put("photos", ph);
+    await DB.put("memos", memo);
+  } catch (e) {
+    alert("写真を保存できませんでした：" + e.message + "\n（端末の空き容量を確認してください）");
+    return;
+  }
+  S.memos.set(memo.id, memo);
+  S.memoThumb.set(memo.id, photos[0]);
+  updateCounts();
+  // 写真が地図上に見えるようにする
+  if (S.map.getZoom() < THUMB_ZOOM || !S.map.getBounds().contains([memo.lat, memo.lon])) {
+    S.map.setView([memo.lat, memo.lon], Math.max(S.map.getZoom(), THUMB_ZOOM));
+  }
+  S.thumbMode = S.map.getZoom() >= THUMB_ZOOM;
+  renderMarker(memo);
+  toast(`📷 #${memo.no} を保存しました${photos.length > 1 ? `（${photos.length}枚）` : ""}`);
+  if (Settings.data.cameraOpenForm) openMemoForm(memo);
+  else setTimeout(() => S.markers.get(memo.id)?.openPopup(), 300);
+  fillPlaceInfo(memo.id);
+}
+
+/** 標高・住所を後から取得してメモに書き足す */
+async function fillPlaceInfo(id) {
+  const m = S.memos.get(id);
+  if (!m) return;
+  const [e, a] = await Promise.all([fetchElevation(m.lat, m.lon), reverseGeocode(m.lat, m.lon)]);
+  const cur = S.memos.get(id);
+  if (!cur || cur.lat !== m.lat || cur.lon !== m.lon) return;
+  Object.assign(cur, { elevation: e ? e.value : null, elevationSrc: e ? e.src : null, address: a });
+  await DB.put("memos", cur);
+}
+
+/* ====================================================================
+ * 写真ビューア（全画面）
+ * ==================================================================== */
+const V = { items: [], idx: 0, url: null, opts: {} };
+function openViewer(items, idx = 0, opts = {}) {
+  if (!items.length) return;
+  V.items = items;
+  V.opts = opts;
+  $("#viewer").hidden = false;
+  showViewer(idx);
+}
+function showViewer(idx) {
+  V.idx = (idx + V.items.length) % V.items.length;
+  const { photo, memo } = V.items[V.idx];
+  if (V.url) URL.revokeObjectURL(V.url);
+  V.url = URL.createObjectURL(photo.blob);
+  const img = $("#v-img");
+  img.src = V.url;
+  $("#v-stage").classList.remove("actual");
+  const mb = (photo.blob.size / 1048576).toFixed(1);
+  $("#v-title").textContent = `#${memo.no ?? ""} ${memo.title || (memo.kind === "photo" ? "写真" : "（無題）")}`;
+  $("#v-meta").textContent = [fmtDate(photo.takenAt || memo.createdAt), `${photo.width}×${photo.height}`, `${mb} MB`,
+    memo.heading != null ? `撮影方向 ${memo.heading}°（${dirName(memo.heading)}）` : ""].filter(Boolean).join("　");
+  $("#v-count").textContent = V.items.length > 1 ? `${V.idx + 1} / ${V.items.length}` : "";
+  $("#v-prev").hidden = $("#v-next").hidden = V.items.length < 2;
+  $("#v-map").hidden = $("#v-edit").hidden = !!V.opts.readonly;
+}
+function closeViewer() {
+  $("#viewer").hidden = true;
+  $("#v-img").removeAttribute("src");
+  if (V.url) URL.revokeObjectURL(V.url);
+  V.url = null;
+}
+function bindViewer() {
+  $("#v-close").onclick = closeViewer;
+  $("#v-prev").onclick = () => showViewer(V.idx - 1);
+  $("#v-next").onclick = () => showViewer(V.idx + 1);
+  $("#v-stage").onclick = () => $("#v-stage").classList.toggle("actual"); // タップで等倍／全体
+  $("#v-map").onclick = () => {
+    const { memo } = V.items[V.idx];
+    closeViewer();
+    closeSheet(true);
+    setFollow(false);
+    S.map.setView([memo.lat, memo.lon], Math.max(S.map.getZoom(), 17));
+    setTimeout(() => S.markers.get(memo.id)?.openPopup(), 300);
+  };
+  $("#v-edit").onclick = () => {
+    const { memo } = V.items[V.idx];
+    closeViewer();
+    const m = S.memos.get(memo.id);
+    if (m) openMemoForm(m);
+  };
+  $("#v-save").onclick = () => {
+    // iPhone は共有シートの「画像を保存」で写真アプリへ、Android は共有またはダウンロード
+    const { photo, memo } = V.items[V.idx];
+    const mime = photo.mime || photo.blob.type || "image/jpeg";
+    const name = `fieldnote_memo${String(memo.no).padStart(3, "0")}_${V.idx + 1}.${extOf(mime)}`;
+    const canShare = navigator.canShare && navigator.canShare({ files: [new File([photo.blob], name, { type: mime })] });
+    deliverBlob(photo.blob, name, mime, canShare ? "share" : "download");
+  };
+  let sx = null, sy = null;
+  const st = $("#v-stage");
+  st.addEventListener("touchstart", (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  st.addEventListener("touchend", (e) => {
+    if (sx == null || st.classList.contains("actual")) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    sx = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && V.items.length > 1) showViewer(V.idx + (dx < 0 ? 1 : -1));
+  }, { passive: true });
+  document.addEventListener("keydown", (e) => {
+    if ($("#viewer").hidden) return;
+    if (e.key === "Escape") closeViewer();
+    else if (e.key === "ArrowLeft") showViewer(V.idx - 1);
+    else if (e.key === "ArrowRight") showViewer(V.idx + 1);
+  });
+}
+
+/* ====================================================================
+ * ZIP（外部ライブラリなし・無圧縮）。写真は JPEG なので圧縮してもほぼ縮まない
+ * ==================================================================== */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xffffffff;
+  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function dosDateTime(d) {
+  if (!(d instanceof Date) || isNaN(d) || d.getFullYear() < 1980) d = new Date();
+  return { time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() };
+}
+/** entries: [{ name, data: string|Blob, date? }] → ZIP の Blob */
+async function makeZip(entries, onProgress) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [i, e] of entries.entries()) {
+    const name = enc.encode(e.name);
+    const data = typeof e.data === "string" ? new Blob([e.data]) : e.data;
+    const crc = crc32(new Uint8Array(await data.arrayBuffer()));
+    const size = data.size;
+    const { time, date } = dosDateTime(e.date);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); // UTF-8 ファイル名
+    lh.setUint16(8, 0, true); lh.setUint16(10, time, true); lh.setUint16(12, date, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(lh.buffer, name, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(10, 0, true); ch.setUint16(12, time, true); ch.setUint16(14, date, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
+    ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+    central.push(ch.buffer, name);
+    offset += 30 + name.length + size;
+    if (offset > 0xfffffff0) throw new Error("ZIP が 4GB を超えるため作成できません");
+    if (onProgress) onProgress(i + 1, entries.length);
+  }
+  let cdSize = 0;
+  for (const c of central) cdSize += c.byteLength;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end.buffer], { type: "application/zip" });
+}
+/** ZIP を読む（無圧縮と deflate に対応）。{ names, get(name) => Blob } */
+async function readZip(blob) {
+  const tailLen = Math.min(blob.size, 65557);
+  const tail = new DataView(await blob.slice(blob.size - tailLen).arrayBuffer());
+  let eocd = -1;
+  for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("ZIP ファイルではありません");
+  const count = tail.getUint16(eocd + 10, true), cdSize = tail.getUint32(eocd + 12, true), cdOff = tail.getUint32(eocd + 16, true);
+  const cdBuf = await blob.slice(cdOff, cdOff + cdSize).arrayBuffer();
+  const cd = new DataView(cdBuf);
+  const dec = new TextDecoder();
+  const files = new Map();
+  let p = 0;
+  for (let i = 0; i < count && p + 46 <= cd.byteLength; i++) {
+    if (cd.getUint32(p, true) !== 0x02014b50) break;
+    const method = cd.getUint16(p + 10, true), csize = cd.getUint32(p + 20, true);
+    const nlen = cd.getUint16(p + 28, true), elen = cd.getUint16(p + 30, true), clen = cd.getUint16(p + 32, true), lho = cd.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(cdBuf, p + 46, nlen));
+    files.set(name, { method, csize, lho });
+    p += 46 + nlen + elen + clen;
+  }
+  const get = async (name) => {
+    const f = files.get(name);
+    if (!f) return null;
+    const lh = new DataView(await blob.slice(f.lho, f.lho + 30).arrayBuffer());
+    const start = f.lho + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+    const raw = blob.slice(start, start + f.csize);
+    if (f.method === 0) return raw;
+    if (f.method === 8 && "DecompressionStream" in window) return new Response(raw.stream().pipeThrough(new DecompressionStream("deflate-raw"))).blob();
+    throw new Error(`未対応の圧縮形式です（${name}）`);
+  };
+  return { names: [...files.keys()], get };
+}
+
+async function exportZip(mode) {
+  toast("ZIP を作成中…", 60000);
+  const base = exportBaseName();
+  const { files, ...data } = await buildJSON("file");
+  const photoFiles = new Map(data.memos.map((m) => [m.id, m.photos.map((p) => p.file)]));
+  const tracks = await DB.all("tracks");
+  const entries = [
+    { name: `${base}/data.json`, data: JSON.stringify(data, null, 1) },
+    { name: `${base}/memos.geojson`, data: JSON.stringify(buildGeoJSON(tracks, photoFiles)) },
+    { name: `${base}/memos.csv`, data: buildCSV(photoFiles) },
+    { name: `${base}/tracks.gpx`, data: buildGPX(tracks) },
+    ...files.map((f) => ({ name: `${base}/${f.path}`, data: f.blob, date: f.date })),
+  ];
+  const zip = await makeZip(entries, (i, n) => { if (i % 5 === 0 || i === n) toast(`ZIP を作成中… ${i}/${n}`, 60000); });
+  toast(`ZIP を作成しました（${(zip.size / 1048576).toFixed(1)} MB）`);
+  return deliverBlob(zip, `${base}.zip`, "application/zip", mode);
 }
 
 /* ====================================================================
@@ -1576,6 +1976,9 @@ function bindUI() {
     if (S.measure) return addMeasurePoint(S.map.getCenter());
     addMemoCenter();
   };
+  $("#btn-camera").onclick = startCamera;
+  $("#camera-input").onchange = onCameraPhotos;
+  bindViewer();
   $("#btn-list").onclick = openList;
   $("#btn-menu").onclick = openMenu;
   $("#status").onclick = () => {
