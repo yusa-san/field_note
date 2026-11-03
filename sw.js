@@ -2,14 +2,14 @@
  * - アプリ本体: ネットワーク優先（更新をすぐ反映）、オフライン時はキャッシュ
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v2";
+const VERSION = "v3";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの
 const RT_MAX = 4000;
 
 const SHELL_FILES = [
-  "./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+  "./", "index.html", "style.css", "georef.js", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
   "https://maps.gsi.go.jp/js/muni.js",
@@ -79,7 +79,7 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(req.url);
   if (TILE_HOSTS.includes(url.hostname)) return e.respondWith(tileResponse(req));
   if (url.origin === self.location.origin) return e.respondWith(shellResponse(req));
-  if (url.hostname === "unpkg.com" || url.href.endsWith("/js/muni.js")) {
+  if (url.hostname === "unpkg.com" || url.hostname === "cdn.jsdelivr.net" || url.href.endsWith("/js/muni.js")) {
     // CDN の固定バージョン：キャッシュ優先
     e.respondWith(caches.match(req, { ignoreVary: true }).then((hit) => hit || fetch(req).then((res) => {
       if (res.ok || res.type === "opaque") caches.open(SHELL).then((c) => c.put(req, res.clone()));

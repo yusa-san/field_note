@@ -161,13 +161,16 @@ const DB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const rq = indexedDB.open("fieldnote", 1);
+      const rq = indexedDB.open("fieldnote", 2);
       rq.onupgradeneeded = () => {
         const db = rq.result;
-        db.createObjectStore("memos", { keyPath: "id" });
-        const ph = db.createObjectStore("photos", { keyPath: "id" });
-        ph.createIndex("memoId", "memoId");
-        db.createObjectStore("tracks", { keyPath: "id" });
+        const has = (n) => db.objectStoreNames.contains(n);
+        if (!has("memos")) db.createObjectStore("memos", { keyPath: "id" });
+        if (!has("photos")) db.createObjectStore("photos", { keyPath: "id" }).createIndex("memoId", "memoId");
+        if (!has("tracks")) db.createObjectStore("tracks", { keyPath: "id" });
+        // v2: PDF から作った地図レイヤ（設定と画像を分けて保存し、透明度変更などで画像を書き直さない）
+        if (!has("overlays")) db.createObjectStore("overlays", { keyPath: "id" });
+        if (!has("overlayImages")) db.createObjectStore("overlayImages", { keyPath: "id" });
       };
       rq.onsuccess = () => res((this.db = rq.result));
       rq.onerror = () => rej(rq.error);
@@ -195,7 +198,7 @@ const DB = {
 };
 
 const Settings = {
-  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false },
+  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false, corsProxy: "" },
   load() {
     try {
       Object.assign(this.data, JSON.parse(localStorage.getItem("fn.settings") || "{}"));
@@ -308,7 +311,7 @@ function initMap() {
     S.thumbMode = tm;
     for (const id of S.memoThumb.keys()) { const m = S.memos.get(id); if (m) renderMarker(m); }
   });
-  S.map.on("click", (e) => S.measure && addMeasurePoint(e.latlng));
+  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng)));
   S.map.on("contextmenu", (e) => onLongPress(e.latlng));
   setupLongPress();
   return !saved; // 初回起動なら最初の測位位置へ移動する
@@ -613,6 +616,7 @@ function openLayers() {
   const body = h("div", {},
     h("div", { class: "sect-title" }, "ベース地図"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
+    h("div", { class: "sect-title" }, "PDF から追加した地図"), pdfLayersSection(),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),
   );
   openSheet("地図の切替", body, { backdrop: false, height: "62vh" });
@@ -1295,6 +1299,7 @@ async function buildJSON(photoMode = "none") {
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
+    overlays: await pdfLayersForExport(photoMode, files),
     files, // 呼び出し側で取り除く（JSON には書かない）
   };
 }
@@ -1312,7 +1317,10 @@ function buildGeoJSON(tracks, photoFiles) {
     if (t.points.length < 2) continue;
     features.push({
       type: "Feature",
-      geometry: { type: "LineString", coordinates: t.points.map((p) => (p[4] != null ? [p[1], p[0], p[4]] : [p[1], p[0]])) },
+      geometry: (() => {
+        const segs = trackSegments(t).map((seg) => seg.map((p) => (p[4] != null ? [p[1], p[0], p[4]] : [p[1], p[0]])));
+        return segs.length > 1 ? { type: "MultiLineString", coordinates: segs } : { type: "LineString", coordinates: segs[0] };
+      })(),
       properties: { kind: "track", id: t.id, name: t.name, startedAt: t.startedAt, endedAt: t.endedAt, distance_m: Math.round(t.distance) },
     });
   }
@@ -1334,8 +1342,9 @@ function buildGPX(tracks) {
   const x = (s) => esc(s);
   const wpts = Array.from(S.memos.values()).map((m) =>
     `<wpt lat="${m.lat}" lon="${m.lon}">${m.elevation != null ? `<ele>${m.elevation}</ele>` : ""}<time>${m.createdAt}</time><name>${x(`#${m.no} ${m.title || ""}`)}</name><desc>${x(m.note || "")}</desc><type>${x(m.category || "")}</type></wpt>`);
+  const pt = (p) => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[4] != null ? `<ele>${p[4]}</ele>` : ""}${p[2] != null ? `<time>${new Date(p[2]).toISOString()}</time>` : ""}</trkpt>`;
   const trks = tracks.filter((t) => t.points.length).map((t) =>
-    `<trk><name>${x(t.name)}</name><trkseg>${t.points.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[4] != null ? `<ele>${p[4]}</ele>` : ""}<time>${new Date(p[2]).toISOString()}</time></trkpt>`).join("")}</trkseg></trk>`);
+    `<trk><name>${x(t.name)}</name>${trackSegments(t).map((seg) => `<trkseg>${seg.map(pt).join("")}</trkseg>`).join("")}</trk>`);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="FieldNote" xmlns="http://www.topografix.com/GPX/1/1">\n${wpts.join("\n")}\n${trks.join("\n")}\n</gpx>\n`;
 }
 
@@ -1400,14 +1409,127 @@ async function doExport(kind, mode, includePhotos) {
 async function importFile(file) {
   const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   if (head[0] === 0x50 && head[1] === 0x4b) return importZip(file);
+  const text = await file.text();
+  if (/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<gpx[\s>]/i.test(text.slice(0, 4096)) || /\.gpx$/i.test(file.name)) {
+    const r = await importGPX(text, file.name);
+    alert(r.error ? `${file.name}：${r.error}` : `GPX 読み込み完了（${file.name}）\n軌跡 ${r.tracks} 本（${r.points.toLocaleString()} 点・${fmtDist(r.distance)}）／地点 ${r.wpts} 件${r.skipped ? `\n重複のためスキップ ${r.skipped} 件` : ""}`);
+    return;
+  }
+  return importJSONText(text);
+}
+async function importJSONText(text) {
   let data;
   try {
-    data = JSON.parse(await file.text());
+    data = JSON.parse(text);
   } catch {
-    return alert("JSON として読み込めませんでした");
+    return alert("読み込めませんでした（ZIP・JSON・GeoJSON・GPX に対応）");
   }
   return importData(data, async () => null);
 }
+/* ---------- GPX 取り込み（GPSLogger など外部の GPS ロガーの記録を軌跡として読み込む） ---------- */
+/** 軌跡の点をセグメント（途切れ）ごとに分ける */
+function trackSegments(t) {
+  const starts = (t.segStarts && t.segStarts.length ? t.segStarts : [0]).filter((i) => i < t.points.length);
+  return starts.map((st, k) => t.points.slice(st, starts[k + 1] ?? t.points.length)).filter((seg) => seg.length);
+}
+function trackLatLngs(t) {
+  return trackSegments(t).map((seg) => seg.map((p) => [p[0], p[1]]));
+}
+const trackSig = (t) => t.points.length ? `${t.points.length}|${t.points[0][2]}|${t.points[t.points.length - 1][2]}|${t.points[0][0]},${t.points[0][1]}` : "";
+
+async function importGPX(text, filename = "") {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) return { error: "GPX（XML）として読み込めませんでした" };
+  const kids = (el, name) => Array.from(el.children).filter((c) => c.localName === name);
+  const txt = (el, name) => kids(el, name)[0]?.textContent.trim() || "";
+  const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+  const parsePt = (el) => {
+    const lat = num(el.getAttribute("lat")), lon = num(el.getAttribute("lon"));
+    if (lat == null || lon == null) return null;
+    const t = Date.parse(txt(el, "time"));
+    // 精度：拡張要素 <accuracy>（GPSLogger 等）があれば使い、なければ hdop×5m を目安に
+    const accEl = el.getElementsByTagNameNS("*", "accuracy")[0];
+    const hdop = num(txt(el, "hdop"));
+    const acc = accEl ? num(accEl.textContent.trim()) : hdop != null ? hdop * 5 : null;
+    const ele = num(txt(el, "ele"));
+    return [+lat.toFixed(7), +lon.toFixed(7), isNaN(t) ? null : t, acc != null ? Math.round(acc) : null, ele != null ? Math.round(ele * 10) / 10 : null];
+  };
+  const base = filename.replace(/\.[^.]*$/, "") || "GPX";
+  const existing = await DB.all("tracks");
+  const sigs = new Set(existing.map(trackSig));
+  const r = { tracks: 0, points: 0, distance: 0, wpts: 0, skipped: 0, ids: [] };
+
+  // 軌跡（trk）と経路（rte）
+  const groups = [];
+  for (const trk of doc.getElementsByTagNameNS("*", "trk")) {
+    groups.push({ name: txt(trk, "name"), segs: kids(trk, "trkseg").map((sg) => kids(sg, "trkpt").map(parsePt).filter(Boolean)) });
+  }
+  for (const rte of doc.getElementsByTagNameNS("*", "rte")) {
+    groups.push({ name: txt(rte, "name"), segs: [kids(rte, "rtept").map(parsePt).filter(Boolean)] });
+  }
+  for (const [gi, g] of groups.entries()) {
+    const segs = g.segs.filter((sg) => sg.length);
+    if (!segs.length) continue;
+    const points = [], segStarts = [];
+    let dist = 0;
+    for (const sg of segs) {
+      segStarts.push(points.length);
+      for (let i = 0; i < sg.length; i++) {
+        if (i) dist += distance({ lat: sg[i - 1][0], lon: sg[i - 1][1] }, { lat: sg[i][0], lon: sg[i][1] });
+        points.push(sg[i]);
+      }
+    }
+    const t = {
+      id: uuid(), name: g.name || (groups.length > 1 ? `${base} (${gi + 1})` : base),
+      startedAt: points[0][2] != null ? new Date(points[0][2]).toISOString() : nowIso(),
+      endedAt: points[points.length - 1][2] != null ? new Date(points[points.length - 1][2]).toISOString() : nowIso(),
+      points, segStarts, distance: dist, source: "gpx", importedFrom: filename || null, project: Settings.data.project || null,
+    };
+    if (sigs.has(trackSig(t))) { r.skipped++; continue; }
+    sigs.add(trackSig(t));
+    await DB.put("tracks", t);
+    r.tracks++; r.points += points.length; r.distance += dist; r.ids.push(t.id);
+  }
+
+  // 地点（wpt）はメモとして取り込む。このアプリが書き出した GPX を戻した場合は重複させない
+  let no = nextNo();
+  for (const w of doc.getElementsByTagNameNS("*", "wpt")) {
+    const p = parsePt(w);
+    if (!p) continue;
+    const createdAt = p[2] != null ? new Date(p[2]).toISOString() : nowIso();
+    const dup = [...S.memos.values()].some((m) => Math.abs(m.lat - p[0]) < 1e-6 && Math.abs(m.lon - p[1]) < 1e-6 && (p[2] == null || m.createdAt === createdAt));
+    if (dup) { r.skipped++; continue; }
+    const m = newMemo({ lat: p[0], lon: p[1], source: "gpx" });
+    Object.assign(m, {
+      no: no++, createdAt, updatedAt: nowIso(), accuracy: p[3], gpsAltitude: p[4],
+      title: txt(w, "name"), note: [txt(w, "desc"), txt(w, "cmt")].filter(Boolean).join("\n"),
+      category: Settings.data.categories.includes(txt(w, "type")) ? txt(w, "type") : Settings.data.categories[Settings.data.categories.length - 1],
+      importedFrom: filename || null, photoCount: 0,
+    });
+    await DB.put("memos", m);
+    S.memos.set(m.id, m);
+    renderMarker(m);
+    fillPlaceInfo(m.id);
+    r.wpts++;
+  }
+  updateCounts();
+  if (!r.tracks && !r.wpts && !r.skipped) return { error: "軌跡も地点も見つかりませんでした" };
+
+  // 取り込んだ軌跡を地図に表示
+  let bounds = null;
+  for (const id of r.ids) {
+    const t = await DB.get("tracks", id);
+    const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
+    S.shownTracks.set(id, line);
+    bounds = bounds ? bounds.extend(line.getBounds()) : L.latLngBounds(line.getBounds().getSouthWest(), line.getBounds().getNorthEast());
+  }
+  if (bounds) {
+    setFollow(false);
+    S.map.fitBounds(bounds, { padding: [40, 40] });
+  }
+  return r;
+}
+
 async function importZip(file) {
   let z, data, base;
   try {
@@ -1482,8 +1604,9 @@ async function importData(data, getPhotoBlob) {
     Settings.data.project = data.project.name;
     Settings.save();
   }
+  const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
   await loadMemos();
-  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本`);
+  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / PDF 地図 ${oAdded} 枚` : ""}`);
 }
 
 /* ====================================================================
@@ -1553,14 +1676,14 @@ async function openMenu() {
     h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "download", inclPhotos.checked) }, `${label} を保存`),
     canShare ? h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "share", inclPhotos.checked) }, `${label} を共有…`) : h("span"));
 
-  const fileIn = h("input", { type: "file", accept: ".zip,.json,.geojson,application/zip,application/json", hidden: true });
+  // GPX は端末によって種類（MIME）が認識されず選べないことがあるので、拡張子での絞り込みはしない
+  const fileIn = h("input", { type: "file", multiple: true, hidden: true });
   fileIn.onchange = async () => {
-    const f = fileIn.files[0];
+    const files = Array.from(fileIn.files || []);
     fileIn.value = "";
-    if (f) {
-      await importFile(f);
-      closeSheet(true);
-    }
+    if (!files.length) return;
+    closeSheet(true);
+    for (const f of files) await importFile(f);
   };
 
   const proj = h("input", { type: "text", value: Settings.data.project, placeholder: "例：犬山城下町 2026秋" });
@@ -1568,9 +1691,11 @@ async function openMenu() {
   const cats = h("input", { type: "text", value: Settings.data.categories.join(", ") });
   const psize = h("select", {}, ...Object.entries(PHOTO_SIZES).map(([v, t]) => h("option", { value: v, selected: String(Settings.data.photoSize) === v }, t)));
   const openForm = h("input", { type: "checkbox", checked: !!Settings.data.cameraOpenForm });
+  const proxyIn = h("input", { type: "text", value: Settings.data.corsProxy || "", placeholder: "例：https://example.workers.dev/?url={url}", inputmode: "url" });
   const saveSettings = () => {
     Settings.data.photoSize = psize.value;
     Settings.data.cameraOpenForm = openForm.checked;
+    Settings.data.corsProxy = proxyIn.value.trim();
     Settings.data.project = proj.value.trim();
     Settings.data.observer = obs.value.trim();
     const c = cats.value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean);
@@ -1594,7 +1719,7 @@ async function openMenu() {
           S.map.removeLayer(S.shownTracks.get(t.id));
           S.shownTracks.delete(t.id);
         } else {
-          const line = L.polyline(t.points.map((p) => [p[0], p[1]]), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
+          const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
           S.shownTracks.set(t.id, line);
           if (t.points.length) S.map.fitBounds(line.getBounds(), { padding: [40, 40] });
         }
@@ -1611,7 +1736,7 @@ async function openMenu() {
         renderTracks();
       };
       trackList.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto;cursor:default" },
-        h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, `${fmtDist(t.distance)}・${t.points.length}点`)),
+        h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, [t.source === "gpx" ? "GPX" : "", fmtDate(t.startedAt), fmtDist(t.distance), `${t.points.length}点`].filter(Boolean).join("・"))),
         showBtn, delBtn));
     }
   };
@@ -1641,8 +1766,8 @@ async function openMenu() {
     h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
 
     h("div", { class: "sect-title" }, "読み込み"),
-    h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON を読み込む（統合）"), fileIn,
-    h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。"),
+    h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
+    h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
 
     h("div", { class: "sect-title" }, "軌跡"),
     trackList,
@@ -1653,6 +1778,7 @@ async function openMenu() {
     h("label", {}, "カテゴリ（カンマ区切り・順に色が決まります）", cats),
     h("label", {}, "写真の保存サイズ（端末内）", psize),
     h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
+    h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn),
     h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存"),
 
     h("div", { class: "sect-title" }, "オフライン"),
@@ -2003,6 +2129,7 @@ async function main() {
   try {
     await resumeTrackIfAny();
     await loadMemos();
+    await loadPdfLayers();
   } catch (e) {
     alert("端末内の保存領域を開けませんでした（プライベートブラウズでは使えない場合があります）：" + e.message);
   }
