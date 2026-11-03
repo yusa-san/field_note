@@ -1,0 +1,17 @@
+{
+  "name": "フィールドノート — 現地調査メモ地図",
+  "short_name": "FieldNote",
+  "description": "現在地を見ながら地図を切り替え、地点メモ・写真・軌跡を記録して JSON 等に書き出す現地調査用アプリ",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1f5f4a",
+  "theme_color": "#1f5f4a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
