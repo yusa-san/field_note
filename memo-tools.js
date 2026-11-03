@@ -111,7 +111,7 @@ function categoryManager(onChange = () => {}, { focusAdd = false } = {}) {
       name.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); name.blur(); } };
       const n = catCount(c);
       const up = h("button", { type: "button", class: "icon-mini", "aria-label": "上へ", onclick: () => { catMove(c, -1); render(); onChange({ type: "move" }); } }, "↑");
-      const del = h("button", { type: "button", class: "icon-mini danger", "aria-label": "削除" }, "🗑");
+      const del = h("button", { type: "button", class: "icon-mini danger", "aria-label": "削除" }, "削除");
       del.onclick = async () => {
         const r = await catDelete(c);
         if (r === undefined) return;
@@ -235,7 +235,7 @@ class VoiceSession {
 function voicePanel(ctx) {
   const modeSel = h("select", { class: "voice-mode" }, ...Object.entries(VOICE_MODES).map(([v, t]) => h("option", { value: v, selected: (Settings.data.voiceMode || "both") === v }, t)));
   modeSel.onchange = () => { Settings.data.voiceMode = modeSel.value; Settings.save(); };
-  const btn = h("button", { type: "button", class: "btn secondary voice-btn" }, "🎙 聞き取りを開始");
+  const btn = h("button", { type: "button", class: "btn secondary voice-btn" }, "聞き取りを開始");
   const status = h("div", { class: "voice-status" });
   const live = h("div", { class: "voice-live", hidden: true });
   const list = h("div", { class: "audio-list" });
@@ -255,7 +255,7 @@ function voicePanel(ctx) {
     ctx.markDirty();
   };
   const setIdle = () => {
-    btn.textContent = "🎙 聞き取りを開始";
+    btn.textContent = "聞き取りを開始";
     btn.classList.remove("recording");
     modeSel.disabled = false;
     live.hidden = true;
@@ -281,7 +281,7 @@ function voicePanel(ctx) {
     if (mode !== "rec") header();
     btn.classList.add("recording");
     modeSel.disabled = true;
-    const tick = () => (btn.textContent = `■ 停止（${fmtDur(sess.elapsed())}${mode === "asr" ? " 書き起こし中" : " 録音中"}）`);
+    const tick = () => (btn.textContent = `停止（${fmtDur(sess.elapsed())}${mode === "asr" ? " 書き起こし中" : " 録音中"}）`);
     tick();
     timer = setInterval(tick, 500);
   };
@@ -305,7 +305,7 @@ function voicePanel(ctx) {
     for (const a of ctx.audios()) {
       const url = URL.createObjectURL(a.blob);
       urls.push(url);
-      const del = h("button", { type: "button", class: "icon-mini danger", "aria-label": "録音を削除" }, "🗑");
+      const del = h("button", { type: "button", class: "icon-mini danger", "aria-label": "録音を削除" }, "削除");
       del.onclick = () => { if (confirm("この録音を削除しますか？")) { ctx.onRemove(a.id); renderList(); } };
       list.append(h("div", { class: "audio-row" },
         h("audio", { controls: true, preload: "metadata", src: url }),
