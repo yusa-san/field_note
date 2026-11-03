@@ -922,7 +922,8 @@ function grGeoref({ rec, blob, isNew, src }) {
   imap.fitBounds(ib);
   // 下：地図
   const gmap = L.map(geoDiv, { zoomControl: false, attributionControl: false, maxZoom: 20 }).setView(S.map.getCenter(), S.map.getZoom());
-  let gbase = makeTile(BASE_LAYERS.find((b) => b.id === (S.baseId === "osm" ? "std" : S.baseId)) || BASE_LAYERS[0]).addTo(gmap);
+  const rasterBases = BASE_LAYERS.filter((b) => !b.vector);
+  let gbase = makeTile(rasterBases.find((b) => b.id === (S.baseId === "osm" ? "std" : S.baseId)) || rasterBases[0]).addTo(gmap);
   GR.maps.push(imap, gmap);
   setTimeout(() => { imap.invalidateSize(); gmap.invalidateSize(); imap.fitBounds(ib); }, 50);
 
@@ -989,7 +990,7 @@ function grGeoref({ rec, blob, isNew, src }) {
     h("option", { value: "mls", selected: rec.warpKind === "mls" }, "近くの点を重視"));
   kindSel.onchange = () => update();
   const localLabel = h("div", { class: "gr-actions" }, h("label", { class: "inline gr-local" }, localCb, "部分ごとに合わせる（ゆがんだ地図向け）"), kindSel);
-  const baseSel = h("select", { class: "gr-method" }, ...BASE_LAYERS.map((b) => h("option", { value: b.id, selected: gbase && b.url === gbase._url }, b.name)));
+  const baseSel = h("select", { class: "gr-method" }, ...rasterBases.map((b) => h("option", { value: b.id, selected: gbase && b.url === gbase._url }, b.name)));
   baseSel.onchange = () => { gmap.removeLayer(gbase); gbase = makeTile(BASE_LAYERS.find((b) => b.id === baseSel.value)).addTo(gmap); };
   // 下の地図を PDF の場所へ移動するための地名検索
   const q = h("input", { type: "search", placeholder: "地名で地図を移動（例：静岡市葵区牛妻）", enterkeyhint: "search" });
