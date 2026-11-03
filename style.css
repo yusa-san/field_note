@@ -144,8 +144,8 @@ svg { fill: currentColor; }
 #sheet-body { overflow-y: auto; padding: 6px 14px 16px; -webkit-overflow-scrolling: touch; }
 
 /* フォーム */
-form label, form .lbl { display: block; font-size: 12.5px; color: var(--fg-2); margin: 10px 0 0; }
-form label.inline { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--fg); }
+form label, form .lbl, #sheet-body label { display: block; font-size: 12.5px; color: var(--fg-2); margin: 10px 0 0; }
+form label.inline, #sheet-body label.inline { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--fg); }
 input[type=text], input[type=search], input[type=number], textarea, select {
   display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 16px; color: var(--fg);
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px;
@@ -421,3 +421,5 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .audio-meta { font-size: 11.5px; color: var(--fg-2); white-space: nowrap; }
 .paudio audio { width: 220px; height: 34px; margin-top: 6px; }
 .paudio small { display: block; color: #666; }
+.geo-steps { margin: 6px 0 12px; padding-left: 1.3em; font-size: 14px; line-height: 1.6; }
+.geo-steps li { margin-bottom: 6px; }
