@@ -599,6 +599,7 @@ function pdfLayersSection() {
           act("範囲へ", () => { closeSheet(true); setFollow(false); if (r.visible === false) setPdfVisible(r.id, true); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }),
           act("位置合わせ", () => { closeSheet(true); openGeoref({ existing: r.id }); }),
           act("名前・出典", () => openPdfLayerEdit(r.id)),
+          act("GeoTIFF 保存", () => exportPdfLayerGeoTiff(r.id)),
           act("削除", async () => { if (!confirm(`「${r.title}」を削除しますか？`)) return; await deletePdfLayer(r.id); render(); }))));
     }
     if (!items.length) box.append(h("p", { class: "note" }, "河川整備計画などの PDF の地図を、位置を合わせて重ねられます。"));
@@ -1150,11 +1151,158 @@ async function pdfLayersForExport(photoMode, files) {
           files.push({ path: `${base}.jgw`, blob: new Blob([[M[0], M[3], M[1], M[4], c, f].map((v) => v.toFixed(10)).join("\r\n") + "\r\n"]) });
           files.push({ path: `${base}.prj`, blob: new Blob([WKT_3857]) });
         }
+        // 位置合わせ済みのラスタ（どの変換方式でも作る）
+        try {
+          toast(`PDF 地図 ${i + 1}/${recs.length} を GeoTIFF に変換中…`, 60000);
+          const t = await pdfLayerGeoTiff(r, img.blob);
+          files.push({ path: `${base}_georef.tif`, blob: t.blob, date: new Date(r.updatedAt || r.createdAt) });
+          o.georefFile = `${base}_georef.tif`;
+        } catch (e) {
+          console.warn("GeoTIFF を作成できません", e);
+        }
       }
     }
     out.push(o);
   }
   return out;
+}
+
+/* ====================================================================
+ * GeoTIFF（位置合わせ済みのラスタ）として書き出す
+ * 変形済みの画像を北が上の EPSG:3857 の格子に描き直し、座標付き TIFF にする（外部ライブラリなし）
+ * ==================================================================== */
+const RASTER_MAX_AREA = 14e6;  // スマホの canvas 上限より少し小さく
+const RASTER_MAX_SIDE = 12000;
+
+/** 元画像 1 画素がメルカトルで何 m に当たるか（細部を落とさない解像度の目安） */
+function sourcePixelSize(rec) {
+  if (isLocal(rec)) {
+    const { nx, ny, pts } = rec.mesh, cw = rec.width / nx, ch = rec.height / ny, v = [];
+    const P = (i, j) => [pts[2 * (j * (nx + 1) + i)], pts[2 * (j * (nx + 1) + i) + 1]];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const a = P(i, j), b = P(i + 1, j), c = P(i, j + 1);
+      v.push(Math.hypot(b[0] - a[0], b[1] - a[1]) / cw, Math.hypot(c[0] - a[0], c[1] - a[1]) / ch);
+    }
+    v.sort((x, y) => x - y);
+    return v[Math.floor(v.length / 2)];
+  }
+  const u = rec.width / 2, w = rec.height / 2;
+  const o = M3.apply(rec.M, u, w), a = M3.apply(rec.M, u + 1, w), b = M3.apply(rec.M, u, w + 1);
+  return Math.min(Math.hypot(a[0] - o[0], a[1] - o[1]), Math.hypot(b[0] - o[0], b[1] - o[1]));
+}
+
+/** 位置合わせ済みの画像を、北が上・EPSG:3857 の画素格子に描き直す */
+async function rectifyPdfLayer(rec, blob) {
+  const outline = isLocal(rec) ? meshOutline(rec.mesh)
+    : [[0, 0], [rec.width, 0], [rec.width, rec.height], [0, rec.height]].map(([u, v]) => M3.apply(rec.M, u, v));
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  let res = sourcePixelSize(rec);
+  let w = Math.ceil((maxX - minX) / res), hh = Math.ceil((maxY - minY) / res);
+  const k = Math.max(1, Math.sqrt((w * hh) / RASTER_MAX_AREA), w / RASTER_MAX_SIDE, hh / RASTER_MAX_SIDE);
+  if (k > 1) { res *= k; w = Math.ceil((maxX - minX) / res); hh = Math.ceil((maxY - minY) / res); }
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement("canvas");
+  c.width = w; c.height = hh;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  // 地図の代わりに「メルカトル → 出力画素」の変換を渡して、表示と同じ描画処理を使う
+  const raster = { latLngToLayerPoint: (ll) => { const [x, y] = toMerc(ll.lat, ll.lng); return L.point((x - minX) / res, (maxY - y) / res); } };
+  drawWarped(ctx, { rec, bmp }, raster, 1, { x: 0, y: 0 });
+  bmp.close();
+  const data = ctx.getImageData(0, 0, w, hh).data;
+  c.width = c.height = 0;
+  return { data, w, h: hh, res, minX, maxY };
+}
+
+async function deflate(u8) {
+  return new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+}
+
+/** RGBA の画素から GeoTIFF（EPSG:3857・Deflate 圧縮・アルファ付き）を作る */
+async function makeGeoTiff({ data, w, h, res, minX, maxY }, onProgress) {
+  const compress = typeof CompressionStream === "function";
+  const rowsPerStrip = Math.max(1, Math.floor(262144 / (w * 4)));
+  const strips = [];
+  for (let y = 0; y < h; y += rowsPerStrip) {
+    const rows = Math.min(rowsPerStrip, h - y);
+    let s = data.slice(y * w * 4, (y + rows) * w * 4);
+    if (compress) {
+      // 予測子2（横方向の差分）：地図のような画像は圧縮が大きく効く
+      for (let r = 0; r < rows; r++) {
+        const o = r * w * 4;
+        for (let x = w - 1; x > 0; x--) for (let c = 0; c < 4; c++) s[o + x * 4 + c] = (s[o + x * 4 + c] - s[o + (x - 1) * 4 + c]) & 255;
+      }
+      s = await deflate(s);
+    }
+    strips.push(s);
+    if (onProgress) onProgress(Math.min(1, (y + rows) / h));
+  }
+  // ファイル構成：ヘッダ(8) → 画素データ → タグの値 → IFD
+  let off = 8;
+  const stripOffsets = strips.map((s) => { const o = off; off += s.length; return o; });
+  const extra = [];
+  const put = (bytes) => { if (off % 2) { extra.push(new Uint8Array(1)); off++; } const o = off; extra.push(bytes); off += bytes.length; return o; };
+  const u16 = (a) => { const b = new Uint8Array(a.length * 2), v = new DataView(b.buffer); a.forEach((x, i) => v.setUint16(i * 2, x, true)); return b; };
+  const u32 = (a) => { const b = new Uint8Array(a.length * 4), v = new DataView(b.buffer); a.forEach((x, i) => v.setUint32(i * 4, x, true)); return b; };
+  const f64 = (a) => { const b = new Uint8Array(a.length * 8), v = new DataView(b.buffer); a.forEach((x, i) => v.setFloat64(i * 8, x, true)); return b; };
+  const SHORT = 3, LONG = 4, DOUBLE = 12;
+  const tags = [];
+  const tag = (id, type, values) => {
+    const size = { 3: 2, 4: 4, 12: 8 }[type] * values.length;
+    const bytes = type === SHORT ? u16(values) : type === LONG ? u32(values) : f64(values);
+    tags.push({ id, type, count: values.length, inline: size <= 4 ? bytes : null, offset: size <= 4 ? 0 : put(bytes) });
+  };
+  tag(256, LONG, [w]);
+  tag(257, LONG, [h]);
+  tag(258, SHORT, [8, 8, 8, 8]);
+  tag(259, SHORT, [compress ? 8 : 1]);           // 8 = Deflate
+  tag(262, SHORT, [2]);                          // RGB
+  tag(273, LONG, stripOffsets);
+  tag(277, SHORT, [4]);
+  tag(278, LONG, [rowsPerStrip]);
+  tag(279, LONG, strips.map((s) => s.length));
+  tag(284, SHORT, [1]);
+  if (compress) tag(317, SHORT, [2]);            // 予測子
+  tag(338, SHORT, [2]);                          // アルファ（非乗算）
+  tag(33550, DOUBLE, [res, res, 0]);             // 画素の大きさ (m)
+  tag(33922, DOUBLE, [0, 0, 0, minX, maxY, 0]);  // 左上の座標
+  // GeoKey：投影座標系・画素は面・EPSG:3857・単位 m
+  tag(34735, SHORT, [1, 1, 0, 4, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 3857, 3076, 0, 1, 9001]);
+  if (off % 2) { extra.push(new Uint8Array(1)); off++; }
+  const ifdOff = off;
+  const ifd = new DataView(new ArrayBuffer(2 + tags.length * 12 + 4));
+  ifd.setUint16(0, tags.length, true);
+  tags.sort((a, b) => a.id - b.id).forEach((t, i) => {
+    const o = 2 + i * 12;
+    ifd.setUint16(o, t.id, true); ifd.setUint16(o + 2, t.type, true); ifd.setUint32(o + 4, t.count, true);
+    if (t.inline) new Uint8Array(ifd.buffer).set(t.inline, o + 8);
+    else ifd.setUint32(o + 8, t.offset, true);
+  });
+  const head = new DataView(new ArrayBuffer(8));
+  head.setUint8(0, 0x49); head.setUint8(1, 0x49); head.setUint16(2, 42, true); head.setUint32(4, ifdOff, true);
+  return new Blob([head.buffer, ...strips, ...extra, ifd.buffer], { type: "image/tiff" });
+}
+
+async function pdfLayerGeoTiff(rec, blob, onProgress) {
+  const r = await rectifyPdfLayer(rec, blob);
+  return { blob: await makeGeoTiff(r, onProgress), w: r.w, h: r.h, res: r.res };
+}
+
+/** 1 枚の PDF 地図を GeoTIFF として端末に保存 */
+async function exportPdfLayerGeoTiff(id) {
+  const it = PDFL.items.get(id);
+  if (!it) return;
+  toast("GeoTIFF を作成中…", 60000);
+  try {
+    const t = await pdfLayerGeoTiff(it.rec, it.blob, (f) => toast(`GeoTIFF を作成中… ${Math.round(f * 100)}%`, 60000));
+    const name = `${safeName(it.rec.title) || "pdfmap"}_georef.tif`;
+    toast(`GeoTIFF：${t.w}×${t.h}px・1画素 約${(t.res * Math.cos((it.bounds().getCenter().lat * Math.PI) / 180)).toFixed(2)} m・${(t.blob.size / 1048576).toFixed(1)} MB`, 4000);
+    await deliverBlob(t.blob, name, "image/tiff", "download");
+  } catch (e) {
+    alert("GeoTIFF を作成できませんでした：" + e.message);
+  }
 }
 
 async function importPdfLayers(list, getBlob) {
@@ -1163,7 +1311,7 @@ async function importPdfLayers(list, getBlob) {
     if (!o || !o.id || !o.M || (await DB.get("overlays", o.id))) continue;
     const blob = await getBlob({ file: o.file, mime: o.mime || "image/jpeg" });
     if (!blob) continue;
-    const { file, mime, crs, matrixNote, ...rec } = o;
+    const { file, mime, crs, matrixNote, georefFile, ...rec } = o;
     await DB.put("overlayImages", { id: rec.id, blob });
     await DB.put("overlays", rec);
     n++;
