@@ -424,7 +424,7 @@ async function maybeLookupPosInfo() {
 
 function updateStatusCoordOnly() {
   const c = S.map.getCenter();
-  $("#st-coord").textContent = "✚ " + fmtLatLon(c.lat, c.lng, 6);
+  $("#st-coord").textContent = "中心 " + fmtLatLon(c.lat, c.lng, 6);
 }
 let centerLookupTimer;
 function updateStatus() {
@@ -1229,7 +1229,7 @@ function openList() {
         lead,
         h("div", {},
           h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${catColor(m.category)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
-          h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `📷${m.photoCount}` : "", m.audioCount ? `🎙${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
+          h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `写真${m.photoCount}` : "", m.audioCount ? `録音${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
           m.note ? h("div", { class: "n" }, m.note) : null),
         dcell);
       item.onclick = (e) => {
@@ -2029,7 +2029,7 @@ async function openMenu() {
     } }, "全データを削除"),
 
     h("p", { class: "note", style: "margin-top:16px" },
-      "使い方：画面の長押しでその地点にメモ／✚ ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は地理院の標高 API（DEM）による値で、GPS高度とは別に記録されます。"),
+      "使い方：画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は地理院の標高 API（DEM）による値で、GPS高度とは別に記録されます。"),
   );
   openSheet("保存・設定", body);
 }
@@ -2086,7 +2086,7 @@ async function onCameraPhotos() {
   }
   S.thumbMode = S.map.getZoom() >= THUMB_ZOOM;
   renderMarker(memo);
-  toast(`📷 #${memo.no} を保存しました${photos.length > 1 ? `（${photos.length}枚）` : ""}`);
+  toast(`写真メモ #${memo.no} を保存しました${photos.length > 1 ? `（${photos.length}枚）` : ""}`);
   if (Settings.data.cameraOpenForm) openMemoForm(memo);
   else setTimeout(() => S.markers.get(memo.id)?.openPopup(), 300);
   fillPlaceInfo(memo.id);
