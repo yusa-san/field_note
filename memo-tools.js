@@ -153,17 +153,22 @@ function pickAudioMime() {
 }
 const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
+/** Android の Chrome は録音とブラウザの音声認識を同時に使えない（認識に録音中の音声を渡す機能も未対応） */
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+
 class VoiceSession {
   /** cb: { onFinal(text), onInterim(text), onState(msg, level) } */
   constructor(mode, cb) {
     this.mode = mode;
     this.cb = cb;
     this.active = false;
-    this.asrOk = mode !== "rec";
+    this.gotText = false;
+    // 録音＋書き起こし：Android では録音を優先し、書き起こしは録音後に端末内で行う
+    this.asrOk = mode === "asr" || (mode === "both" && !IS_ANDROID);
   }
   async start() {
     const wantRec = this.mode !== "asr", wantAsr = this.mode !== "rec";
-    if (wantAsr && !SpeechRec) {
+    if (wantAsr && this.asrOk && !SpeechRec) {
       if (this.mode === "asr") throw new Error("このブラウザは音声の書き起こしに対応していません（Android の Chrome、iPhone の Safari などで使えます）");
       this.asrOk = false;
       this.cb.onState("このブラウザは書き起こしに対応していないため、録音のみ行います", "warn");
@@ -192,7 +197,7 @@ class VoiceSession {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
-        if (res.isFinal) this.cb.onFinal(res[0].transcript.trim());
+        if (res.isFinal) { this.gotText = true; this.cb.onFinal(res[0].transcript.trim()); }
         else interim += res[0].transcript;
       }
       this.cb.onInterim(interim);
@@ -204,11 +209,15 @@ class VoiceSession {
       this.asrOk = false;
       this.cb.onState(this.mode === "asr"
         ? `書き起こしを開始できません（${e.error}）`
-        : `この端末では録音と同時に書き起こせないため、録音のみ続けています（${e.error}）。書き起こしは「書き起こしのみ」で使えます`, "warn");
+        : "この端末では録音と同時に書き起こせないため、録音を続け、停止後に端末内で書き起こします", "warn");
     };
     // 無音が続くと自動で止まるので、録音中は再開し続ける
     r.onend = () => { this.cb.onInterim(""); if (this.active && this.asrOk) setTimeout(() => this._startAsr(), 250); };
-    try { r.start(); } catch {}
+    try {
+      // 対応ブラウザ（PC の Chrome 135 以降など）では録音中のマイク音声をそのまま認識に渡す
+      const track = this.stream && this.stream.getAudioTracks()[0];
+      if (track && !IS_ANDROID) r.start(track); else r.start();
+    } catch { try { r.start(); } catch {} }
   }
   /** 止めて、録音があれば { blob, mime, duration } を返す */
   async stop() {
@@ -227,6 +236,140 @@ class VoiceSession {
   }
   elapsed() { return (Date.now() - this.t0) / 1000; }
 }
+
+/* ====================================================================
+ * 端末内での書き起こし（録音から）
+ * Whisper を Web Worker で動かす。音声は外部に送らない。モデルは初回だけダウンロードしてキャッシュ
+ * ==================================================================== */
+const ASR_MODELS = {
+  base: { id: "onnx-community/whisper-base", label: "軽量（約80MB・精度はほどほど）" },
+  small: { id: "onnx-community/whisper-small", label: "高精度（約250MB）" },
+};
+// 無音の区間で出やすい、実際には話していない定型文
+const ASR_HALLUCINATION = /^(ご視聴ありがとうございました|ご覧いただきありがとうございます|チャンネル登録.*|おやすみなさい|字幕.*|\[.*\]|（.*）)[。．.!！]*$/;
+/** 書き起こし結果の後処理：音の注記（(拍手) など）と、同じ言葉の暴走した繰り返しを取り除く */
+function cleanAsrText(text) {
+  let t = String(text || "").trim();
+  t = t.replace(/[（(][^（）()]{0,400}[）)]/g, ""); // 括弧書きの音の注記
+  t = t.replace(/(.{1,12}?)(?:[\s、,]*\1){4,}/g, "$1"); // 5 回以上の繰り返しは 1 回に
+  t = t.replace(/\s{2,}/g, " ").trim();
+  if (!t || ASR_HALLUCINATION.test(t) || /^[。．.、,!！?？\s]*$/.test(t)) return "";
+  return t;
+}
+const LocalASR = {
+  worker: null, seq: 0, pending: new Map(), device: null, modelKey: null, chain: Promise.resolve(), onProgress: null,
+  _w() {
+    if (!this.worker) {
+      this.worker = new Worker("asr-worker.js", { type: "module" });
+      this.worker.onmessage = (e) => this._msg(e.data);
+      this.worker.onerror = (e) => {
+        for (const p of this.pending.values()) p.reject(new Error(e.message || "書き起こしの準備に失敗しました（通信を確認してください）"));
+        this.pending.clear();
+        this.worker = null; this.device = null; this.modelKey = null;
+      };
+    }
+    return this.worker;
+  },
+  _msg(m) {
+    if (m.type === "progress") { if (this.onProgress) this.onProgress(m.p); return; }
+    const p = this.pending.get(m.id);
+    if (!p) return;
+    this.pending.delete(m.id);
+    m.type === "error" ? p.reject(new Error(m.message)) : p.resolve(m);
+  },
+  _call(msg, transfer) {
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this._w().postMessage({ ...msg, id }, transfer || []);
+    });
+  },
+  async modelFor() {
+    const pref = Settings.data.asrModel || "auto";
+    if (ASR_MODELS[pref]) return pref;
+    try { return navigator.gpu && (await navigator.gpu.requestAdapter()) ? "small" : "base"; } catch { return "base"; }
+  },
+  async ensure(onProgress) {
+    const key = await this.modelFor();
+    if (this.modelKey === key && this.device) return;
+    if (!(Settings.data.asrDownloaded || {})[key] &&
+      !confirm(`端末内で書き起こすためのモデル「${ASR_MODELS[key].label}」をダウンロードします。最初の 1 回だけで、以後はオフラインでも使えます。Wi-Fi でのダウンロードをおすすめします。続けますか？`)) {
+      throw new Error("キャンセルしました");
+    }
+    const files = new Map();
+    this.onProgress = (p) => {
+      if (p.status !== "progress" || !p.file) return;
+      files.set(p.file, [p.loaded || 0, p.total || 0]);
+      let l = 0, t = 0;
+      for (const [a, b] of files.values()) { l += a; t += b; }
+      if (t) onProgress(`書き起こしモデルを準備中… ${Math.round((l / t) * 100)}%`);
+    };
+    onProgress("書き起こしモデルを準備中…");
+    try {
+      const r = await this._call({ type: "load", model: ASR_MODELS[key].id, gpu: true });
+      this.device = r.device;
+      this.modelKey = key;
+      Settings.data.asrDownloaded = { ...(Settings.data.asrDownloaded || {}), [key]: true };
+      Settings.save();
+    } finally {
+      this.onProgress = null;
+    }
+  },
+  /** 録音を 16kHz・モノラルの波形に */
+  async decode(blob) {
+    const ctx = new OfflineAudioContext(1, 1, 16000);
+    const ab = await ctx.decodeAudioData(await blob.arrayBuffer());
+    return ab.getChannelData(0);
+  },
+  /** 30 秒以内の区切りに分ける（言葉の途中で切らないよう、20〜29.5 秒の間で一番静かな所で切る） */
+  split(pcm, sr = 16000) {
+    const fr = sr / 10, n = Math.ceil(pcm.length / fr), rms = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      const a = i * fr, b = Math.min(pcm.length, a + fr);
+      for (let k = a; k < b; k++) s += pcm[k] * pcm[k];
+      rms[i] = Math.sqrt(s / Math.max(1, b - a));
+    }
+    const out = [];
+    let st = 0;
+    while (st < pcm.length) {
+      let en = pcm.length;
+      if (pcm.length - st > 30 * sr) {
+        const a = Math.floor((st + 20 * sr) / fr), b = Math.floor((st + 29.5 * sr) / fr);
+        let best = a;
+        for (let i = a; i <= b; i++) if (rms[i] < rms[best]) best = i;
+        en = Math.min(pcm.length, Math.round(best * fr + fr / 2));
+      }
+      let loud = 0;
+      for (let i = Math.floor(st / fr); i < Math.ceil(en / fr); i++) loud = Math.max(loud, rms[i] || 0);
+      out.push({ pcm: pcm.slice(st, en), loud });
+      st = en;
+    }
+    return out;
+  },
+  /** 録音を書き起こす。onText は区切りごとに呼ばれる。同時に 1 件ずつ順番に処理 */
+  transcribe(blob, { onProgress, onText }) {
+    const job = async () => {
+      await this.ensure(onProgress);
+      onProgress("録音を読み込み中…");
+      const parts = this.split(await this.decode(blob));
+      let all = "";
+      for (const [i, c] of parts.entries()) {
+        onProgress(`書き起こし中 ${i + 1}/${parts.length}（${this.device === "webgpu" ? "GPU" : "CPU"}）`);
+        if (c.loud < 0.008) continue; // ほぼ無音
+        const r = await this._call({ type: "run", pcm: c.pcm }, [c.pcm.buffer]);
+        const t = cleanAsrText(r.text);
+        if (!t) continue;
+        all += t;
+        onText(t);
+      }
+      return all;
+    };
+    const p = this.chain.then(job, job);
+    this.chain = p.catch(() => {});
+    return p;
+  },
+};
 
 /**
  * メモ画面の「聞き取り」欄：録音ボタン・書き起こし・録音一覧
@@ -278,7 +421,11 @@ function voicePanel(ctx) {
       status.className = "voice-status warn";
       return;
     }
-    if (mode !== "rec") header();
+    if (mode === "asr" || (mode === "both" && sess.asrOk)) header();
+    if (mode === "both" && !sess.asrOk && SpeechRec !== undefined) {
+      status.textContent = IS_ANDROID ? "録音中です。この端末では、停止後に端末内で書き起こします" : status.textContent;
+      status.className = "voice-status";
+    }
     btn.classList.add("recording");
     modeSel.disabled = true;
     const tick = () => (btn.textContent = `停止（${fmtDur(sess.elapsed())}${mode === "asr" ? " 書き起こし中" : " 録音中"}）`);
@@ -294,8 +441,66 @@ function voicePanel(ctx) {
       const a = { id: uuid(), memoId: ctx.memo.id, blob: r.blob, mime: r.mime, duration: Math.round(r.duration), createdAt: nowIso() };
       ctx.onRecorded(a);
       renderList();
-      toast(`録音を追加しました（${fmtDur(a.duration)}）。メモの保存で確定します`);
+      // 録音＋書き起こしで、その場で文字にできなかったときは、録音から端末内で書き起こす
+      if (s.mode === "both" && !s.gotText && Settings.data.autoTranscribe !== false) {
+        toast(`録音を追加しました（${fmtDur(a.duration)}）。端末内で書き起こします`);
+        transcribeAudio(a);
+      } else {
+        toast(`録音を追加しました（${fmtDur(a.duration)}）。メモの保存で確定します`);
+      }
     }
+  };
+
+  // ---- 録音からの書き起こし
+  const jobs = new Map(); // audio id -> 状態の文字列
+  const recHeader = (a) => {
+    const d = new Date(a.createdAt), hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return `【聞き取り ${hm}（録音から書き起こし）】\n`;
+  };
+  /** フォームが開いていればメモ欄へ、閉じていれば保存済みのメモへ追記 */
+  const deliver = async (text) => {
+    if (document.body.contains(ctx.textarea)) {
+      const ta = ctx.textarea;
+      ta.value += text;
+      ta.scrollTop = ta.scrollHeight;
+      ctx.markDirty();
+      return true;
+    }
+    const m = S.memos.get(ctx.memo.id);
+    if (!m) return false;
+    m.note = (m.note || "") + text;
+    m.updatedAt = nowIso();
+    await DB.put("memos", m);
+    renderMarker(m);
+    updateCounts();
+    return true;
+  };
+  function transcribeAudio(a) {
+    if (jobs.has(a.id)) return;
+    jobs.set(a.id, "順番待ち…");
+    renderList();
+    let started = false;
+    LocalASR.transcribe(a.blob, {
+      onProgress: (msg) => { jobs.set(a.id, msg); updateJobStatus(a.id); },
+      onText: (t) => {
+        const end = /[。．.!?！？\n]$/.test(t) ? "" : "。";
+        const head = started ? "" : `${ctx.textarea.value && !ctx.textarea.value.endsWith("\n") ? "\n" : ""}${recHeader(a)}`;
+        started = true;
+        deliver(head + t + end);
+      },
+    }).then((all) => {
+      jobs.delete(a.id);
+      renderList();
+      toast(all ? "録音の書き起こしをメモに追加しました" : "書き起こせる音声が見つかりませんでした");
+    }, (e) => {
+      jobs.delete(a.id);
+      renderList();
+      if (e.message !== "キャンセルしました") toast("書き起こしできませんでした：" + e.message, 5000);
+    });
+  }
+  const updateJobStatus = (id) => {
+    const el = list.querySelector(`[data-job="${id}"]`);
+    if (el) el.textContent = jobs.get(id) || "";
   };
   btn.onclick = () => (sess ? stop() : start());
 
@@ -307,9 +512,12 @@ function voicePanel(ctx) {
       urls.push(url);
       const del = h("button", { type: "button", class: "icon-mini danger", "aria-label": "録音を削除" }, "削除");
       del.onclick = () => { if (confirm("この録音を削除しますか？")) { ctx.onRemove(a.id); renderList(); } };
+      const busy = jobs.has(a.id);
+      const tr = h("button", { type: "button", class: "icon-mini", disabled: busy, onclick: () => transcribeAudio(a) }, busy ? "書き起こし中" : "書き起こす");
       list.append(h("div", { class: "audio-row" },
         h("audio", { controls: true, preload: "metadata", src: url }),
-        h("span", { class: "audio-meta" }, `${fmtDate(a.createdAt)}・${fmtDur(a.duration || 0)}`), del));
+        h("span", { class: "audio-meta" }, `${fmtDate(a.createdAt)}・${fmtDur(a.duration || 0)}`), tr, del));
+      if (busy) list.append(h("div", { class: "audio-job", "data-job": a.id }, jobs.get(a.id)));
     }
   };
   renderList();
@@ -317,7 +525,7 @@ function voicePanel(ctx) {
   const el = h("div", { class: "voice" },
     h("div", { class: "voice-row" }, btn, modeSel),
     live, status, list,
-    h("div", { class: "note" }, "書き起こした文字は上のメモ欄に追記されます。録音は端末内に保存され、ZIP 書き出しに含まれます。書き起こしはブラウザの音声認識を使うため通信が必要で、音声は認識のためにブラウザの提供元（Android の Chrome なら Google）に送られます。"));
+    h("div", { class: "note" }, "書き起こした文字は上のメモ欄に追記されます。録音は端末内に保存され、ZIP 書き出しに含まれます。「書き起こしのみ」はブラウザの音声認識を使うため通信が必要で、音声は認識のためにブラウザの提供元（Android の Chrome なら Google）に送られます。録音からの書き起こし（Android の「録音＋書き起こし」や「書き起こす」ボタン）は端末内で行い、音声は外部に送りません。初回だけモデルのダウンロードが必要です。"));
   return {
     el,
     isActive: () => !!sess,
