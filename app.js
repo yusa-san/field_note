@@ -993,18 +993,128 @@ function openList() {
   const list = h("div");
   const tabList = h("button", { type: "button", class: "chip" }, "リスト");
   const tabPhotos = h("button", { type: "button", class: "chip" }, "写真");
+  const selBtn = h("button", { type: "button", class: "chip sel-toggle" }, "選択して整理");
   let allPhotos = null;
   DB.all("photos").then((ps) => {
     allPhotos = ps;
     tabPhotos.textContent = `写真（${ps.length}）`;
     if (listState.view === "photos") render();
   });
+  // ---- 選択モード
+  let selecting = false;
+  const sel = new Set();
+  let shown = []; // 今の絞り込みで表示中のメモ
+  const bar = h("div", { class: "sel-bar", hidden: true });
+  const panel = h("div", { class: "sel-panel" });
+  const selCount = h("b");
+  const allBtn = h("button", { type: "button", class: "chip" }, "全選択");
+  const act = (label, fn, cls = "") => h("button", { type: "button", class: "chip " + cls, onclick: () => (sel.size ? fn() : toast("メモを選んでください")) }, label);
+  bar.append(
+    h("div", { class: "sel-head" }, selCount, allBtn, h("button", { type: "button", class: "chip", onclick: () => setSelecting(false) }, "完了")),
+    h("div", { class: "chips" },
+      act("カテゴリ変更", () => showPanel("cat")),
+      act("タグを付ける", () => showPanel("tag+")),
+      act("タグを外す", () => showPanel("tag-")),
+      act("地図で表示", showOnMap),
+      act("書き出し", () => showPanel("export")),
+      act("削除", bulkDelete, "danger")),
+    panel);
+  allBtn.onclick = () => {
+    const allOn = shown.length && shown.every((m) => sel.has(m.id));
+    for (const m of shown) allOn ? sel.delete(m.id) : sel.add(m.id);
+    render();
+  };
+  const setSelecting = (on) => {
+    selecting = on;
+    if (!on) sel.clear();
+    if (on) listState.view = "list";
+    panel.replaceChildren();
+    render();
+  };
+  selBtn.onclick = () => setSelecting(!selecting);
+  const selected = () => [...sel].map((id) => S.memos.get(id)).filter(Boolean);
+  /** 選んだメモをまとめて更新して保存 */
+  const applyAll = async (fn, msg) => {
+    const ms = selected();
+    const now = nowIso();
+    for (const m of ms) { fn(m); m.updatedAt = now; await DB.put("memos", m); renderMarker(m); }
+    updateCounts();
+    panel.replaceChildren();
+    render();
+    toast(`${ms.length} 件の${msg}`);
+  };
+  const showPanel = (kind) => {
+    panel.replaceChildren();
+    if (kind === "cat") {
+      const cats = [...new Set([...Settings.data.categories, ...selected().map((m) => m.category).filter(Boolean)])];
+      panel.append(h("div", { class: "note" }, `選んだ ${sel.size} 件のカテゴリを変更：`),
+        h("div", { class: "chips" }, ...cats.map((c) => h("button", { type: "button", class: "chip", onclick: () => applyAll((m) => (m.category = c), `カテゴリを「${c}」にしました`) }, h("i", { class: "dot-i", style: `background:${catColor(c)}` }), c))));
+    } else if (kind === "tag+") {
+      const inp = h("input", { type: "text", placeholder: "付けるタグ（カンマ区切りで複数可）" });
+      const known = [...new Set([...S.memos.values()].flatMap((m) => m.tags || []))].slice(0, 30);
+      const add = (tags) => {
+        tags = tags.map((t) => t.trim()).filter(Boolean);
+        if (!tags.length) return;
+        applyAll((m) => (m.tags = [...new Set([...(m.tags || []), ...tags])]), `メモにタグ「${tags.join("・")}」を付けました`);
+      };
+      panel.append(h("form", { class: "sel-form", onsubmit: (e) => { e.preventDefault(); add(inp.value.split(/[,、，]/)); } }, inp, h("button", { type: "submit", class: "chip on" }, "付ける")),
+        known.length ? h("div", { class: "chips" }, ...known.map((t) => h("button", { type: "button", class: "chip", onclick: () => add([t]) }, "#" + t))) : null);
+      setTimeout(() => inp.focus(), 50);
+    } else if (kind === "tag-") {
+      const cnt = new Map();
+      for (const m of selected()) for (const t of m.tags || []) cnt.set(t, (cnt.get(t) || 0) + 1);
+      panel.append(cnt.size
+        ? h("div", {}, h("div", { class: "note" }, "外すタグを選ぶ（数字は付いている件数）："),
+          h("div", { class: "chips" }, ...[...cnt].map(([t, n]) => h("button", { type: "button", class: "chip", onclick: () => applyAll((m) => (m.tags = (m.tags || []).filter((x) => x !== t)), `メモからタグ「${t}」を外しました`) }, `#${t} (${n})`))))
+        : h("div", { class: "note" }, "選んだメモにはタグがありません"));
+    } else if (kind === "export") {
+      const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(["x"], "x.txt", { type: "text/plain" })] }));
+      const ex = (k, mode) => async () => {
+        EXPORT_SEL = new Set(sel);
+        try { await doExport(k, mode, false); } finally { EXPORT_SEL = null; }
+      };
+      const row = (label, k) => h("div", { class: "menu-grid" },
+        h("button", { type: "button", class: "btn secondary", onclick: ex(k, "download") }, `${label} を保存`),
+        canShare ? h("button", { type: "button", class: "btn secondary", onclick: ex(k, "share") }, `${label} を共有…`) : h("span"));
+      panel.append(h("div", { class: "note" }, `選んだ ${sel.size} 件だけを書き出します（写真を含む。軌跡と PDF 地図は含みません）`),
+        row("ZIP（写真つき）", "zip"), h("div", { style: "height:6px" }), row("GeoJSON", "geojson"), h("div", { style: "height:6px" }), row("CSV", "csv"));
+    }
+  };
+  function showOnMap() {
+    const ms = selected();
+    closeSheet(true);
+    setFollow(false);
+    if (ms.length === 1) S.map.setView([ms[0].lat, ms[0].lon], Math.max(S.map.getZoom(), 17));
+    else S.map.fitBounds(L.latLngBounds(ms.map((m) => [m.lat, m.lon])), { padding: [60, 60], maxZoom: 18 });
+    // 選んだメモを数秒だけ目立たせる
+    setTimeout(() => {
+      for (const m of ms) S.markers.get(m.id)?.getElement()?.classList.add("hl");
+      setTimeout(() => { for (const m of ms) S.markers.get(m.id)?.getElement()?.classList.remove("hl"); }, 5000);
+    }, 400);
+  }
+  async function bulkDelete() {
+    const ms = selected();
+    const photos = ms.reduce((n, m) => n + (m.photoCount || 0), 0);
+    if (!confirm(`選んだ ${ms.length} 件のメモ${photos ? `（写真 ${photos} 枚を含む）` : ""}を削除しますか？`)) return;
+    if (ms.length >= 5 && !confirm(`本当に ${ms.length} 件を削除しますか？元に戻せません。必要なら先に「書き出し」で保存してください。`)) return;
+    for (const m of ms) await deleteMemo(m.id);
+    sel.clear();
+    panel.replaceChildren();
+    render();
+    toast(`${ms.length} 件を削除しました`);
+  }
+
   tabList.onclick = () => { listState.view = "list"; render(); };
-  tabPhotos.onclick = () => { listState.view = "photos"; render(); };
+  tabPhotos.onclick = () => { if (selecting) setSelecting(false); listState.view = "photos"; render(); };
   const render = () => {
     listState = { q: q.value.trim(), cat: cat.value, sort: sort.value, view: listState.view };
     tabList.classList.toggle("on", listState.view === "list");
     tabPhotos.classList.toggle("on", listState.view === "photos");
+    selBtn.classList.toggle("on", selecting);
+    selBtn.textContent = selecting ? "選択をやめる" : "選択して整理";
+    bar.hidden = !selecting;
+    $("#sheet-title").textContent = `メモ一覧（${S.memos.size}件）`;
+    for (const id of [...sel]) if (!S.memos.has(id)) sel.delete(id);
     let arr = Array.from(S.memos.values());
     if (listState.cat) arr = arr.filter((m) => m.category === listState.cat);
     if (listState.q) {
@@ -1015,6 +1125,10 @@ function openList() {
     if (listState.sort === "near" && ref) arr.sort((a, b) => distance(ref, a) - distance(ref, b));
     else if (listState.sort === "no") arr.sort((a, b) => (a.no || 0) - (b.no || 0));
     else arr.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
+    shown = arr;
+    const hiddenSel = [...sel].filter((id) => !arr.some((m) => m.id === id)).length;
+    selCount.textContent = `${sel.size} 件選択${hiddenSel ? `（うち ${hiddenSel} 件は絞り込みの外）` : ""}`;
+    allBtn.textContent = arr.length && arr.every((m) => sel.has(m.id)) ? "全解除" : `表示中を全選択（${arr.length}）`;
     list.replaceChildren();
     if (listState.view === "photos") return renderGallery(list, arr, allPhotos);
     if (!arr.length) {
@@ -1023,19 +1137,28 @@ function openList() {
     }
     for (const m of arr) {
       let dcell = "";
-      if (ref) {
+      if (ref && !selecting) {
         const b = bearing(ref, m);
         dcell = h("div", { class: "d" }, fmtDist(distance(ref, m)), h("br"),
           h("span", { class: "arrow", style: `transform:rotate(${b - (S.heading ?? 0)}deg)` }, "↑"), " ", dirName(b));
       }
-      const item = h("div", { class: "memo-item" },
-        h("i", { style: `background:${catColor(m.category)}` }),
+      const lead = selecting
+        ? h("input", { type: "checkbox", class: "sel-cb", checked: sel.has(m.id), tabindex: "-1" })
+        : h("i", { style: `background:${catColor(m.category)}` });
+      const item = h("div", { class: "memo-item" + (selecting ? " selecting" : "") + (sel.has(m.id) ? " picked" : "") },
+        lead,
         h("div", {},
-          h("div", { class: "t" }, `#${m.no ?? ""} ${m.title || "（無題）"}`),
+          h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${catColor(m.category)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
           h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `📷${m.photoCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
           m.note ? h("div", { class: "n" }, m.note) : null),
         dcell);
-      item.onclick = () => {
+      item.onclick = (e) => {
+        if (selecting) {
+          e.preventDefault();
+          sel.has(m.id) ? sel.delete(m.id) : sel.add(m.id);
+          render();
+          return;
+        }
         closeSheet(true);
         setFollow(false);
         S.map.setView([m.lat, m.lon], Math.max(S.map.getZoom(), 17));
@@ -1047,11 +1170,11 @@ function openList() {
   q.oninput = render;
   cat.onchange = render;
   sort.onchange = render;
-  render();
-  listRefresh = render;
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort), list), {
+  listRefresh = () => { if (!selecting) render(); };
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort), list, bar), {
     onClose: () => (listRefresh = null),
   });
+  render();
 }
 function renderGallery(box, memos, allPhotos) {
   if (!allPhotos) return box.append(h("div", { class: "empty" }, "読み込み中…"));
@@ -1276,8 +1399,13 @@ const memoOut = (m) => {
  * 全データの JSON を作る。
  * photoMode: "none" = 写真はファイル名のみ / "dataUrl" = base64 で埋め込む / "file" = ZIP 用（files に実体を返す）
  */
+/** 書き出し対象のメモ（一覧で選んだメモだけを書き出すときは EXPORT_SEL に ID を入れる） */
+let EXPORT_SEL = null;
+const exportMemos = () => Array.from(S.memos.values()).filter((m) => !EXPORT_SEL || EXPORT_SEL.has(m.id)).sort((a, b) => (a.no || 0) - (b.no || 0));
+const exportTracks = async () => (EXPORT_SEL ? [] : DB.all("tracks"));
+
 async function buildJSON(photoMode = "none") {
-  const memos = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0));
+  const memos = exportMemos();
   const out = [];
   const files = [];
   for (const m of memos) {
@@ -1293,13 +1421,13 @@ async function buildJSON(photoMode = "none") {
     }
     out.push({ ...memoOut(m), photos });
   }
-  const tracks = (await DB.all("tracks")).map((t) => ({ ...t, pointFields: ["lat", "lon", "time_ms", "accuracy_m", "altitude_m"] }));
+  const tracks = (await exportTracks()).map((t) => ({ ...t, pointFields: ["lat", "lon", "time_ms", "accuracy_m", "altitude_m"] }));
   return {
     format: "fieldnote", version: 1, exportedAt: nowIso(),
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
-    overlays: await pdfLayersForExport(photoMode, files),
+    overlays: EXPORT_SEL ? [] : await pdfLayersForExport(photoMode, files),
     files, // 呼び出し側で取り除く（JSON には書かない）
   };
 }
@@ -1308,7 +1436,7 @@ async function buildJSONText(photoMode) {
   return JSON.stringify(data, null, 1);
 }
 function buildGeoJSON(tracks, photoFiles) {
-  const features = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0)).map((m) => {
+  const features = exportMemos().map((m) => {
     const { lat, lon, ...props } = memoOut(m);
     const extra = photoFiles ? { photos: (photoFiles.get(m.id) || []).join(";") } : {};
     return { type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: { ...props, tags: (m.tags || []).join(","), photoCount: m.photoCount || 0, ...extra } };
@@ -1334,13 +1462,13 @@ function buildCSV(photoFiles) {
     v = String(v);
     return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   };
-  const rows = Array.from(S.memos.values()).sort((a, b) => (a.no || 0) - (b.no || 0))
+  const rows = exportMemos()
     .map((m) => cols.map((c) => q(c === "photos" ? photoFiles.get(m.id) || [] : m[c])).join(","));
   return "﻿" + [cols.join(","), ...rows].join("\r\n"); // BOM 付き（Excel で文字化けしないように）
 }
 function buildGPX(tracks) {
   const x = (s) => esc(s);
-  const wpts = Array.from(S.memos.values()).map((m) =>
+  const wpts = exportMemos().map((m) =>
     `<wpt lat="${m.lat}" lon="${m.lon}">${m.elevation != null ? `<ele>${m.elevation}</ele>` : ""}<time>${m.createdAt}</time><name>${x(`#${m.no} ${m.title || ""}`)}</name><desc>${x(m.note || "")}</desc><type>${x(m.category || "")}</type></wpt>`);
   const pt = (p) => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[4] != null ? `<ele>${p[4]}</ele>` : ""}${p[2] != null ? `<time>${new Date(p[2]).toISOString()}</time>` : ""}</trkpt>`;
   const trks = tracks.filter((t) => t.points.length).map((t) =>
@@ -1351,7 +1479,7 @@ function buildGPX(tracks) {
 function safeName(s) {
   return (s || "").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
 }
-const exportBaseName = () => `fieldnote_${safeName(Settings.data.project) ? safeName(Settings.data.project) + "_" : ""}${stamp()}`;
+const exportBaseName = () => `fieldnote_${safeName(Settings.data.project) ? safeName(Settings.data.project) + "_" : ""}${stamp()}${EXPORT_SEL ? `_selected${EXPORT_SEL.size}` : ""}`;
 function deliverFile(text, ext, mime, mode) {
   return deliverBlob(new Blob([text], { type: mime }), `${exportBaseName()}.${ext}`, mime, mode);
 }
@@ -1388,14 +1516,14 @@ async function deliverBlob(blob, name, mime, mode) {
 
 async function doExport(kind, mode, includePhotos) {
   try {
-    const tracks = await DB.all("tracks");
+    const tracks = await exportTracks();
     let ok;
     if (kind === "zip") ok = await exportZip(mode);
     else if (kind === "json") ok = await deliverFile(await buildJSONText(includePhotos ? "dataUrl" : "none"), "json", "application/json", mode);
     else if (kind === "geojson") ok = await deliverFile(JSON.stringify(buildGeoJSON(tracks)), "geojson", "application/geo+json", mode);
     else if (kind === "csv") ok = await deliverFile(buildCSV(), "csv", "text/csv", mode);
     else if (kind === "gpx") ok = await deliverFile(buildGPX(tracks), "gpx", "application/gpx+xml", mode);
-    if (ok && (kind === "json" || kind === "zip")) {
+    if (ok && !EXPORT_SEL && (kind === "json" || kind === "zip")) {
       Settings.data.lastExportAt = nowIso();
       Settings.save();
       updateCounts();
@@ -2051,7 +2179,7 @@ async function exportZip(mode) {
   const base = exportBaseName();
   const { files, ...data } = await buildJSON("file");
   const photoFiles = new Map(data.memos.map((m) => [m.id, m.photos.map((p) => p.file)]));
-  const tracks = await DB.all("tracks");
+  const tracks = await exportTracks();
   const entries = [
     { name: `${base}/data.json`, data: JSON.stringify(data, null, 1) },
     { name: `${base}/memos.geojson`, data: JSON.stringify(buildGeoJSON(tracks, photoFiles)) },
