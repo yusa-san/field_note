@@ -15,6 +15,7 @@ const ATTR_HAZ = '<a href="https://disaportal.gsi.go.jp/" target="_blank" rel="n
 const BASE_LAYERS = [
   { id: "std", name: "標準地図", url: `${GSI_XYZ}/std/{z}/{x}/{y}.png`, max: 18, attr: ATTR_GSI },
   { id: "pale", name: "淡色地図", url: `${GSI_XYZ}/pale/{z}/{x}/{y}.png`, max: 18, attr: ATTR_GSI },
+  { id: "gsivt", name: "地理院 Vector", vector: true, url: VT_TILES, max: 16, attr: ATTR_GSI },
   { id: "photo", name: "写真（最新）", url: `${GSI_XYZ}/seamlessphoto/{z}/{x}/{y}.jpg`, max: 18, attr: ATTR_GSI },
   { id: "gazo1", name: "写真 1974-78", url: `${GSI_XYZ}/gazo1/{z}/{x}/{y}.jpg`, min: 10, max: 17, attr: ATTR_GSI },
   { id: "old10", name: "写真 1961-69", url: `${GSI_XYZ}/ort_old10/{z}/{x}/{y}.png`, min: 10, max: 17, attr: ATTR_GSI },
@@ -263,13 +264,32 @@ function saveView() {
   } catch {}
 }
 
-function setBase(id) {
+let baseToken = 0;
+async function setBase(id) {
   const def = BASE_LAYERS.find((b) => b.id === id) || BASE_LAYERS[0];
-  if (S.base) S.map.removeLayer(S.base);
-  S.base = makeTile(def, 1, 1).addTo(S.map);
+  const token = ++baseToken;
   S.baseId = def.id;
-  if (def.min && S.map.getZoom() < def.min) toast(`この地図はズーム${def.min}以上で表示されます`);
   saveView();
+  let layer;
+  if (def.vector) {
+    // 地理院地図Vector：ライブラリとスタイルを読み込んでから差し替える（それまでは今の地図を表示）
+    toast("地理院 Vector を読み込み中…", 8000);
+    try {
+      layer = await makeVectorBase();
+    } catch (e) {
+      if (token !== baseToken) return;
+      toast("地理院 Vector を表示できません：" + e.message, 5000);
+      return setBase("std");
+    }
+    if (token !== baseToken) return;
+    $("#toast").hidden = true;
+  } else {
+    layer = makeTile(def, 1, 1);
+    VT.layer = null;
+  }
+  if (S.base) S.map.removeLayer(S.base);
+  S.base = layer.addTo(S.map);
+  if (def.min && S.map.getZoom() < def.min) toast(`この地図はズーム${def.min}以上で表示されます`);
 }
 function setOverlay(id, opacity) {
   const def = OVERLAYS.find((o) => o.id === id);
@@ -661,14 +681,29 @@ function tileThumbUrl(def) {
 }
 function openLayers() {
   const grid = h("div", { class: "layer-grid" });
-  for (const def of BASE_LAYERS) {
+  const cards = [];
+  const select = (def, card) => {
+    setBase(def.id);
+    cards.forEach((c) => c.classList.remove("on"));
+    card.classList.add("on");
+  };
+  // 地理院 Vector：カードの横に「表示する項目」「スタイル」（子画面）を置く
+  const vtDef = BASE_LAYERS.find((b) => b.vector);
+  const vtCard = h("button", { class: "layer-card" + (S.baseId === vtDef.id ? " on" : ""), type: "button" },
+    vtSwatch(Settings.data.vtStyle || "std"), h("span", {}, vtDef.name, h("small", {}, (VT_PRESETS[Settings.data.vtStyle] || VT_PRESETS.std).name)));
+  vtCard.onclick = () => select(vtDef, vtCard);
+  cards.push(vtCard);
+  const openVt = (fn) => () => { if (S.baseId !== vtDef.id) select(vtDef, vtCard); fn(); };
+  const vtRow = h("div", { class: "vt-row-top" }, vtCard,
+    h("div", { class: "vt-tools" },
+      h("button", { type: "button", class: "btn secondary", onclick: openVt(openVectorLayersSheet) }, "表示する項目"),
+      h("button", { type: "button", class: "btn secondary", onclick: openVt(openVectorStyleSheet) }, "スタイル"),
+      h("div", { class: "note" }, "線や文字がくっきりした地図。配色と表示する項目を選べます")));
+  for (const def of BASE_LAYERS.filter((b) => !b.vector)) {
     const card = h("button", { class: "layer-card" + (def.id === S.baseId ? " on" : ""), type: "button" },
       h("img", { src: tileThumbUrl(def), alt: "", loading: "lazy", crossorigin: "anonymous" }), h("span", {}, def.name));
-    card.onclick = () => {
-      setBase(def.id);
-      $$(".layer-card", grid).forEach((c) => c.classList.remove("on"));
-      card.classList.add("on");
-    };
+    card.onclick = () => select(def, card);
+    cards.push(card);
     grid.append(card);
   }
   const ovs = h("div");
@@ -684,7 +719,8 @@ function openLayers() {
     ovs.append(h("div", { class: "ov-row" }, cb, h("div", {}, def.name, h("small", {}, def.desc + (def.min ? `（ズーム${def.min}〜）` : ""))), rg));
   }
   const body = h("div", {},
-    h("div", { class: "sect-title" }, "ベース地図"), grid,
+    h("div", { class: "sect-title" }, "ベース地図：地理院 Vector"), vtRow,
+    h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
     h("div", { class: "sect-title" }, "PDF から追加した地図"), pdfLayersSection(),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),

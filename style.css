@@ -423,3 +423,22 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .paudio small { display: block; color: #666; }
 .geo-steps { margin: 6px 0 12px; padding-left: 1.3em; font-size: 14px; line-height: 1.6; }
 .geo-steps li { margin-bottom: 6px; }
+
+/* 地理院 Vector */
+.vt-swatch { position: relative; width: 100%; height: 62px; overflow: hidden; display: block; }
+.vt-swatch i { position: absolute; display: block; }
+.vt-swatch b { position: absolute; right: 6px; bottom: 4px; font: 600 15px/1 "Noto Serif JP", "Hiragino Mincho ProN", serif; }
+.vt-row-top { display: grid; grid-template-columns: minmax(96px, 1fr) 2fr; gap: 10px; align-items: start; }
+.vt-tools { display: flex; flex-direction: column; gap: 8px; }
+.vt-tools .btn { padding: 10px 12px; font-size: 14px; }
+.vt-tools .note { margin: 0; }
+.layer-card span small { display: block; font-size: 11px; color: var(--fg-2); }
+.vt-back { margin-bottom: 10px; }
+.vt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.vt-card { border: 2px solid transparent; border-radius: 10px; background: var(--bg-2); padding: 0; overflow: hidden; text-align: left; cursor: pointer; }
+.vt-card.on { border-color: var(--accent-2); }
+.vt-card .vt-swatch { height: 70px; }
+.vt-name { display: block; padding: 6px 8px 0; font-weight: 700; font-size: 13.5px; }
+.vt-sub { display: block; padding: 2px 8px 8px; font-size: 11.5px; color: var(--fg-2); line-height: 1.4; }
+.vt-row { padding: 7px 0; border-bottom: 1px solid var(--line); margin: 0 !important; }
+.leaflet-gl-layer { z-index: 1; }
