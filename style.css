@@ -362,3 +362,4 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .gr-pt.sel span { outline: 3px solid #ffd400; }
 .gr-search { display: flex; gap: 6px; align-items: center; }
 .gr-search input { margin: 0; padding: 6px 10px; font-size: 16px; }
+.gr-local { display: flex; align-items: center; font-size: 13.5px !important; color: var(--fg) !important; margin: 0 !important; gap: 8px; }

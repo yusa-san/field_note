@@ -125,6 +125,154 @@ function georefFit(gcps, method) {
 }
 
 /* ====================================================================
+ * 部分ごとの位置合わせ（ゆがんだ地図向け）
+ * 画像を細かい格子に分け、格子点ごとに「近い対応点ほど重く」した最小二乗のアフィン変換を当てはめる
+ * （Moving Least Squares）。隣り合う部分はなめらかにつながり、対応点の上ではほぼぴったり合う。
+ * ==================================================================== */
+const LOCAL_MIN_POINTS = 4;
+const MESH_CELLS = 24; // 長辺方向の分割数
+
+/** 画像上の点 (u,v) の行き先（メルカトル）を、対応点の重み付き最小二乗アフィンで求める。skip 番目の点は使わない */
+function mlsMap(pts, u, v, scale, skip = -1) {
+  let sw = 0, px = 0, py = 0, qx = 0, qy = 0;
+  const w = new Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    if (i === skip) continue;
+    const dx = (pts[i].u - u) * scale, dy = (pts[i].v - v) * scale;
+    const d2 = dx * dx + dy * dy;
+    w[i] = 1 / (d2 * d2 + 1e-14); // 距離の4乗に反比例：近い点ほど強く効く（部分ごとの性格を強める）
+    sw += w[i];
+    px += w[i] * pts[i].u; py += w[i] * pts[i].v;
+    qx += w[i] * pts[i].x; qy += w[i] * pts[i].y;
+  }
+  px /= sw; py /= sw; qx /= sw; qy /= sw;
+  // A = (Σ w p̂ᵀp̂)⁻¹ Σ w p̂ᵀq̂（p̂ = p - p*, q̂ = q - q*。行ベクトル表記）
+  let a = 0, b = 0, d = 0, e11 = 0, e12 = 0, e21 = 0, e22 = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i === skip) continue;
+    const hx = pts[i].u - px, hy = pts[i].v - py, gx = pts[i].x - qx, gy = pts[i].y - qy;
+    a += w[i] * hx * hx; b += w[i] * hx * hy; d += w[i] * hy * hy;
+    e11 += w[i] * hx * gx; e12 += w[i] * hx * gy; e21 += w[i] * hy * gx; e22 += w[i] * hy * gy;
+  }
+  const det = a * d - b * b;
+  if (!det || !isFinite(det)) return null;
+  const i11 = d / det, i12 = -b / det, i22 = a / det;
+  const A11 = i11 * e11 + i12 * e21, A12 = i11 * e12 + i12 * e22, A21 = i12 * e11 + i22 * e21, A22 = i12 * e12 + i22 * e22;
+  const ux = u - px, vy = v - py;
+  return [ux * A11 + vy * A21 + qx, ux * A12 + vy * A22 + qy];
+}
+/** 正方行列の連立一次方程式（部分ピボット付きガウス消去） */
+function solveSquare(A, B) {
+  const n = A.length, m = B[0].length;
+  const M = A.map((r, i) => [...r, ...B[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-12) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = M[r][c] / M[c][c];
+      if (f) for (let k = c; k < n + m; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  const X = Array.from({ length: n }, () => new Array(m).fill(0));
+  for (let r = n - 1; r >= 0; r--) for (let j = 0; j < m; j++) {
+    let v = M[r][n + j];
+    for (let k = r + 1; k < n; k++) v -= M[r][k] * X[k][j];
+    X[r][j] = v / M[r][r];
+  }
+  return X;
+}
+/** 薄板スプライン（TPS）：すべての対応点をなめらかに通る面で補間する */
+function tpsModel(pts, scale) {
+  const n = pts.length;
+  const qx0 = pts.reduce((a, p) => a + p.x, 0) / n, qy0 = pts.reduce((a, p) => a + p.y, 0) / n;
+  const P = pts.map((p) => [p.u * scale, p.v * scale]);
+  const U = (r2) => (r2 > 0 ? r2 * Math.log(r2) : 0);
+  const L = Array.from({ length: n + 3 }, () => new Array(n + 3).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) L[i][j] = U((P[i][0] - P[j][0]) ** 2 + (P[i][1] - P[j][1]) ** 2);
+    L[i][n] = L[n][i] = 1; L[i][n + 1] = L[n + 1][i] = P[i][0]; L[i][n + 2] = L[n + 2][i] = P[i][1];
+  }
+  const B = [...pts.map((p) => [p.x - qx0, p.y - qy0]), [0, 0], [0, 0], [0, 0]];
+  const X = solveSquare(L, B);
+  if (!X) return null;
+  return (u, v) => {
+    const x = u * scale, y = v * scale;
+    let rx = X[n][0] + X[n + 1][0] * x + X[n + 2][0] * y, ry = X[n][1] + X[n + 1][1] * x + X[n + 2][1] * y;
+    for (let i = 0; i < n; i++) {
+      const k = U((x - P[i][0]) ** 2 + (y - P[i][1]) ** 2);
+      rx += k * X[i][0]; ry += k * X[i][1];
+    }
+    return [rx + qx0, ry + qy0];
+  };
+}
+/** 部分ごとの変換関数 (u,v)→メルカトル。kind: "tps"（なめらか）| "mls"（近くの点を重視） */
+function localModel(pts, W, H, kind, skip = -1) {
+  const scale = 1 / Math.hypot(W, H);
+  const use = skip >= 0 ? pts.filter((_, i) => i !== skip) : pts;
+  if (kind === "mls") return (u, v) => mlsMap(use, u, v, scale);
+  return tpsModel(use, scale);
+}
+function localPoints(gcps) {
+  return gcps.map((g) => { const [x, y] = toMerc(g.lat, g.lon); return { u: g.u, v: g.v, x, y, lat: g.lat }; });
+}
+/** 格子点ごとの行き先を計算（保存して描画・判定に使う） */
+function buildMesh(gcps, W, H, kind) {
+  const f = localModel(localPoints(gcps), W, H, kind);
+  if (!f) return null;
+  const nx = W >= H ? MESH_CELLS : Math.max(4, Math.round((MESH_CELLS * W) / H));
+  const ny = H >= W ? MESH_CELLS : Math.max(4, Math.round((MESH_CELLS * H) / W));
+  const out = [];
+  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) {
+    const r = f((i * W) / nx, (j * H) / ny);
+    if (!r || !isFinite(r[0]) || !isFinite(r[1])) return null;
+    out.push(+r[0].toFixed(3), +r[1].toFixed(3));
+  }
+  return { nx, ny, pts: out };
+}
+/** 1点抜き検証：各点を、他の点だけで予測したときのずれ（m）。大きい点は置き間違いの可能性 */
+function looErrors(gcps, W, H, kind) {
+  const pts = localPoints(gcps);
+  return pts.map((p, i) => {
+    const f = localModel(pts, W, H, kind, i);
+    const r = f && f(p.u, p.v);
+    return r ? Math.hypot(r[0] - p.x, r[1] - p.y) * Math.cos((p.lat * Math.PI) / 180) : NaN;
+  });
+}
+function georefFitLocal(gcps, W, H, kind = "tps") {
+  const pts = gcps.filter((g) => g.u != null && g.lat != null);
+  if (pts.length < LOCAL_MIN_POINTS) return { error: `部分ごとの位置合わせには ${LOCAL_MIN_POINTS} 点以上必要です（地図全体に散らばるよう 8 点以上がおすすめ）` };
+  const g = georefFit(pts, "affine"); // 全体の目安（書き出しや予備用）
+  if (g.error) return g;
+  const mesh = buildMesh(pts, W, H, kind);
+  if (!mesh) return { error: "計算できませんでした。点の配置を見直してください" };
+  const residuals = looErrors(pts, W, H, kind);
+  const ok = residuals.filter((r) => isFinite(r));
+  const rms = ok.length ? Math.sqrt(ok.reduce((s, r) => s + r * r, 0) / ok.length) : null;
+  return { M: g.M, mesh, residuals, rms, n: pts.length, method: "affine", local: true, kind };
+}
+/** レイヤの格子の外周（メルカトル） */
+function meshOutline(mesh) {
+  const { nx, ny, pts } = mesh, P = (i, j) => [pts[2 * (j * (nx + 1) + i)], pts[2 * (j * (nx + 1) + i) + 1]];
+  const o = [];
+  for (let i = 0; i <= nx; i++) o.push(P(i, 0));
+  for (let j = 1; j <= ny; j++) o.push(P(nx, j));
+  for (let i = nx - 1; i >= 0; i--) o.push(P(i, ny));
+  for (let j = ny - 1; j > 0; j--) o.push(P(0, j));
+  return o;
+}
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const isLocal = (rec) => rec.warp === "local" && rec.mesh;
+
+/* ====================================================================
  * 地図レイヤの描画
  * 画面サイズの canvas に、パン・ズームが止まったときだけ描き直す（Leaflet の Canvas レンダラと同じ方式）。
  * 巨大な画像要素を 3D 変形して重ねる方式は、スマホの GPU メモリを使い切ってちらつき・操作不能の原因になるため使わない。
@@ -187,8 +335,48 @@ const PdfCanvas = L.Renderer.extend({
   },
 });
 
+/** 部分ごとの位置合わせ：格子の各マスを2つの三角形に分け、三角形ごとにアフィンで描く */
+function drawMesh(ctx, it, map, m, origin) {
+  const { width: W, height: H, mesh } = it.rec;
+  const { nx, ny, pts } = mesh;
+  const g = new Array((nx + 1) * (ny + 1));
+  for (let k = 0; k < g.length; k++) {
+    const p = map.latLngToLayerPoint(fromMerc(pts[2 * k], pts[2 * k + 1]));
+    g[k] = [p.x - origin.x, p.y - origin.y];
+  }
+  const cw = W / nx, ch = H / ny, kx = it.bmp.width / W, ky = it.bmp.height / H;
+  const cvw = ctx.canvas.width / m, cvh = ctx.canvas.height / m;
+  const tri = (A, B, C, a, b, O, x0, y0) => {
+    // 画面外の三角形は描かない
+    const minx = Math.min(A[0], B[0], C[0]), maxx = Math.max(A[0], B[0], C[0]), miny = Math.min(A[1], B[1], C[1]), maxy = Math.max(A[1], B[1], C[1]);
+    if (maxx < 0 || maxy < 0 || minx > cvw || miny > cvh) return;
+    // 継ぎ目に髪の毛のような隙間が出ないよう、三角形を重心から少しだけ広げて切り抜く
+    const cx = (A[0] + B[0] + C[0]) / 3, cy = (A[1] + B[1] + C[1]) / 3;
+    const ex = (P) => { const dx = P[0] - cx, dy = P[1] - cy, d = Math.hypot(dx, dy) || 1; return [P[0] + (dx / d) * 0.7, P[1] + (dy / d) * 0.7]; };
+    const [a1, b1, c1] = [ex(A), ex(B), ex(C)];
+    ctx.save();
+    ctx.setTransform(m, 0, 0, m, 0, 0);
+    ctx.beginPath(); ctx.moveTo(a1[0], a1[1]); ctx.lineTo(b1[0], b1[1]); ctx.lineTo(c1[0], c1[1]); ctx.closePath();
+    ctx.clip();
+    ctx.setTransform(m * a[0], m * a[1], m * b[0], m * b[1], m * O[0], m * O[1]);
+    const l = Math.max(0, x0 - 2), t = Math.max(0, y0 - 2), r = Math.min(W, x0 + cw + 2), bt = Math.min(H, y0 + ch + 2);
+    ctx.drawImage(it.bmp, l * kx, t * ky, (r - l) * kx, (bt - t) * ky, l - x0, t - y0, r - l, bt - t);
+    ctx.restore();
+  };
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const A = g[j * (nx + 1) + i], B = g[j * (nx + 1) + i + 1], C = g[(j + 1) * (nx + 1) + i], D = g[(j + 1) * (nx + 1) + i + 1];
+    const x0 = i * cw, y0 = j * ch;
+    // 三角形 ABC：A を原点に、横方向 (B-A)/cw・縦方向 (C-A)/ch
+    tri(A, B, C, [(B[0] - A[0]) / cw, (B[1] - A[1]) / cw], [(C[0] - A[0]) / ch, (C[1] - A[1]) / ch], A, x0, y0);
+    // 三角形 DCB：D が (x0+cw, y0+ch) に対応
+    const a2 = [(D[0] - C[0]) / cw, (D[1] - C[1]) / cw], b2 = [(D[0] - B[0]) / ch, (D[1] - B[1]) / ch];
+    tri(D, C, B, a2, b2, [D[0] - a2[0] * cw - b2[0] * ch, D[1] - a2[1] * cw - b2[1] * ch], x0, y0);
+  }
+}
+
 /** 画像を変換行列どおりに描く。射影変換は格子に分けて各マスをアフィンで近似 */
 function drawWarped(ctx, it, map, m, origin) {
+  if (isLocal(it.rec)) return drawMesh(ctx, it, map, m, origin);
   const { width: W, height: H, M } = it.rec;
   const n = it.rec.method === "projective" ? 12 : 1;
   const P = (u, v) => {
@@ -275,6 +463,7 @@ function makePdfItem(rec, blob) {
   return {
     rec, blob, bmp: null, bmpKey: null, renderer: null,
     corners() {
+      if (isLocal(this.rec)) return meshOutline(this.rec.mesh).map(([x, y]) => fromMerc(x, y));
       const { width: w, height: h, M } = this.rec;
       return [[0, 0], [w, 0], [w, h], [0, h]].map(([u, v]) => { const [x, y] = M3.apply(M, u, v); return fromMerc(x, y); });
     },
@@ -355,15 +544,19 @@ function pdfLayerClick(latlng) {
   const items = [...PDFL.items.values()].filter((it) => it.rec.visible !== false).sort((a, b) => (b.rec.order || 0) - (a.rec.order || 0));
   const [x, y] = toMerc(latlng.lat, latlng.lng);
   for (const it of items) {
-    const inv = M3.inv(it.rec.M);
-    if (!inv) continue;
-    const [u, v] = M3.apply(inv, x, y);
-    if (u < 0 || v < 0 || u > it.rec.width || v > it.rec.height) continue;
+    if (isLocal(it.rec)) {
+      if (!pointInPolygon(x, y, meshOutline(it.rec.mesh))) continue;
+    } else {
+      const inv = M3.inv(it.rec.M);
+      if (!inv) continue;
+      const [u, v] = M3.apply(inv, x, y);
+      if (u < 0 || v < 0 || u > it.rec.width || v > it.rec.height) continue;
+    }
     const r = it.rec;
     const link = r.sourceUrl ? `${r.sourceUrl}${/\.pdf($|\?)/i.test(r.sourceUrl) && !r.sourceUrl.includes("#") ? `#page=${r.page}` : ""}` : null;
     const el = h("div", {},
       h("div", { class: "pt" }, r.title || "PDF 地図"),
-      h("div", { class: "ps" }, [`p.${r.page}`, r.sourceName, r.fit?.rms != null ? `誤差 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("　")),
+      h("div", { class: "ps" }, [`p.${r.page}`, r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("　")),
       link ? h("div", { style: "margin-top:4px;word-break:break-all" }, h("a", { href: link, target: "_blank", rel: "noopener" }, "元の PDF を開く ↗")) : h("div", { class: "ps" }, "（出典 URL 未登録）"),
       h("div", { class: "pa" },
         h("button", { type: "button", onclick: () => { S.map.closePopup(); setPdfVisible(r.id, false); toast("非表示にしました（地図の切替から戻せます）"); } }, "非表示"),
@@ -400,7 +593,7 @@ function pdfLayersSection() {
       const act = (label, fn) => h("button", { type: "button", class: "chip", onclick: fn }, label);
       box.append(h("div", { class: "pdf-row" },
         h("div", { class: "ov-row", style: "border:0;padding-bottom:2px" }, cb,
-          h("div", {}, r.title || "PDF 地図", h("small", {}, [`p.${r.page}`, r.sourceName, r.fit?.rms != null ? `誤差 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("・"))), rg),
+          h("div", {}, r.title || "PDF 地図", h("small", {}, [`p.${r.page}`, r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("・"))), rg),
         h("div", { class: "chips" },
           toggle("gray", "モノクロ"), toggle("multiply", "白を透過"),
           act("範囲へ", () => { closeSheet(true); setFollow(false); if (r.visible === false) setPdfVisible(r.id, true); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }),
@@ -422,7 +615,7 @@ function openPdfLayerEdit(id) {
   const title = h("input", { type: "text", value: r.title || "" });
   const url = h("input", { type: "text", value: r.sourceUrl || "", placeholder: "https://…/xxx.pdf", inputmode: "url" });
   const form = h("form", {}, h("label", {}, "名前", title), h("label", {}, "出典 URL（ポップアップのリンク先）", url),
-    h("p", { class: "note" }, `元ファイル：${r.sourceName || "—"}　ページ：${r.page}　画像：${r.width}×${r.height}px　変換：${r.fit?.method === "projective" ? "射影" : "アフィン"}（${r.gcps.length}点）`),
+    h("p", { class: "note" }, `元ファイル：${r.sourceName || "—"}　ページ：${r.page}　画像：${r.width}×${r.height}px　変換：${isLocal(r) ? "部分ごとに合わせる" : r.fit?.method === "projective" ? "射影" : "アフィン"}（${r.gcps.length}点）`),
     h("button", { class: "btn primary block", type: "submit" }, "保存"));
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -743,8 +936,20 @@ function grGeoref({ rec, blob, isNew, src }) {
   const refit = () => {
     const pts = usable();
     const method = methodSel.value;
-    fit = pts.length >= 3 ? georefFit(pts, method) : null;
+    if (localCb.checked) fit = pts.length >= 3 ? georefFitLocal(pts, W, Hh, kindSel.value) : null;
+    else fit = pts.length >= 3 ? georefFit(pts, method) : null;
     if (fit && fit.error) fit = { error: fit.error };
+  };
+  /** 画像上の点の地図上の予測位置 */
+  const predict = (u, v) => {
+    if (!fit || !fit.M) return null;
+    if (fit.local) {
+      const f = localModel(localPoints(usable()), W, Hh, fit.kind);
+      const r = f && f(u, v);
+      if (r) return fromMerc(r[0], r[1]);
+    }
+    const [x, y] = M3.apply(fit.M, u, v);
+    return fromMerc(x, y);
   };
   const redraw = () => {
     for (const m of mk.img) imap.removeLayer(m);
@@ -775,6 +980,14 @@ function grGeoref({ rec, blob, isNew, src }) {
     h("option", { value: "affine", selected: rec.method !== "projective" }, "アフィン変換（推奨）"),
     h("option", { value: "projective", selected: rec.method === "projective" }, "射影変換（4点以上・写真や斜めの図向け）"));
   methodSel.onchange = () => update();
+  // 部分ごとに合わせるモード（ゆがんだ地図向け）
+  const localCb = h("input", { type: "checkbox", checked: rec.warp === "local" });
+  localCb.onchange = () => update();
+  const kindSel = h("select", { class: "gr-method" },
+    h("option", { value: "tps", selected: rec.warpKind !== "mls" }, "なめらか（推奨）"),
+    h("option", { value: "mls", selected: rec.warpKind === "mls" }, "近くの点を重視"));
+  kindSel.onchange = () => update();
+  const localLabel = h("div", { class: "gr-actions" }, h("label", { class: "inline gr-local" }, localCb, "部分ごとに合わせる（ゆがんだ地図向け）"), kindSel);
   const baseSel = h("select", { class: "gr-method" }, ...BASE_LAYERS.map((b) => h("option", { value: b.id, selected: gbase && b.url === gbase._url }, b.name)));
   baseSel.onchange = () => { gmap.removeLayer(gbase); gbase = makeTile(BASE_LAYERS.find((b) => b.id === baseSel.value)).addTo(gmap); };
   // 下の地図を PDF の場所へ移動するための地名検索
@@ -825,12 +1038,16 @@ function grGeoref({ rec, blob, isNew, src }) {
     } else if (n < 3) t = `点${n + 1}：画像と地図で同じ場所（交差点・橋・河川の合流点など）を順にタップ。3点以上必要です`;
     else t = "点を追加するか、点をドラッグして微調整。終わったら「保存」";
     if (fit && fit.error) t = fit.error;
+    else if (fit && fit.local) t += fit.rms != null ? `　｜部分ごと：検証誤差 RMS ${fit.rms.toFixed(1)} m（${fit.n}点。各点を他の点だけで予測したずれ。大きい点は置き間違いの可能性）` : `　｜部分ごと（${fit.n}点）`;
     else if (fit) t += fit.rms != null ? `　｜誤差 RMS ${fit.rms.toFixed(1)} m（${fit.n}点）` : `　｜${fit.n}点（誤差の確認には${methodSel.value === "projective" ? 5 : 4}点以上）`;
+    if (localCb.checked && !fit) t += `　｜部分ごとの位置合わせは ${LOCAL_MIN_POINTS} 点以上・地図全体に散らばるよう 8 点以上がおすすめ`;
+    methodSel.disabled = localCb.checked;
+    kindSel.hidden = !localCb.checked;
     msg.textContent = t;
     saveBtn.disabled = !(fit && fit.M);
     // 重ねて確認
     if (prevBtn.classList.contains("on") && fit && fit.M) {
-      const r2 = { ...rec, M: fit.M, opacity: 0.6, multiply: true };
+      const r2 = { ...rec, M: fit.M, method: fit.method, warp: fit.local ? "local" : null, mesh: fit.local ? fit.mesh : null, opacity: 0.6, multiply: true };
       if (!preview) {
         const pane = gmap.getPane("grPreview") || gmap.createPane("grPreview");
         pane.style.zIndex = 350;
@@ -857,9 +1074,8 @@ function grGeoref({ rec, blob, isNew, src }) {
     else {
       g = { u, v, lat: null, lon: null };
       // 3点以上あれば地図上の位置を予測して置く（ドラッグで合わせる）
-      if (fit && fit.M) {
-        const [x, y] = M3.apply(fit.M, u, v);
-        const ll = fromMerc(x, y);
+      const ll = predict(u, v);
+      if (ll) {
         Object.assign(g, { lat: ll.lat, lon: ll.lng, pred: true });
         gmap.panTo(ll);
       }
@@ -882,7 +1098,8 @@ function grGeoref({ rec, blob, isNew, src }) {
     const clean = usable().map(({ u, v, lat, lon }) => ({ u: +u.toFixed(2), v: +v.toFixed(2), lat: +lat.toFixed(7), lon: +lon.toFixed(7) }));
     const out = {
       ...rec, gcps: clean, method: fit.method, M: fit.M, updatedAt: nowIso(),
-      fit: { method: fit.method, rms: fit.rms, residuals: fit.residuals, n: fit.n },
+      warp: fit.local ? "local" : null, mesh: fit.local ? fit.mesh : null, warpKind: fit.local ? fit.kind : null,
+      fit: { method: fit.method, local: !!fit.local, kind: fit.kind || null, rms: fit.rms, residuals: fit.residuals, n: fit.n },
     };
     try {
       if (isNew) {
@@ -904,6 +1121,7 @@ function grGeoref({ rec, blob, isNew, src }) {
   };
 
   ui.foot.append(msg, list, searchForm,
+    localLabel,
     h("div", { class: "gr-actions" }, methodSel, baseSel, prevBtn,
       isNew && src ? h("button", { type: "button", class: "btn secondary", onclick: () => { grClose(); URL.revokeObjectURL(url); grCrop(src, rec.page); } }, "切り出しに戻る") : null,
       saveBtn));
@@ -920,12 +1138,12 @@ async function pdfLayersForExport(photoMode, files) {
   const out = [];
   for (const [i, r] of recs.entries()) {
     const base = `overlays/pdfmap_${String(i + 1).padStart(2, "0")}`;
-    const o = { ...r, file: `${base}.jpg`, mime: "image/jpeg", crs: "EPSG:3857", matrixNote: "M は画像 px (列,行) → EPSG:3857 (m) の 3x3 行列（行優先）" };
+    const o = { ...r, file: `${base}.jpg`, mime: "image/jpeg", crs: "EPSG:3857", matrixNote: "M は画像 px (列,行) → EPSG:3857 (m) の 3x3 行列（行優先）。warp=local のときは mesh（格子点ごとの EPSG:3857 座標、(nx+1)×(ny+1) 点を行ごと）で表示し、M は全体の目安" };
     if (photoMode === "file") {
       const img = await DB.get("overlayImages", r.id);
       if (img) {
         files.push({ path: o.file, blob: img.blob, date: new Date(r.updatedAt || r.createdAt) });
-        if (r.method !== "projective") {
+        if (r.method !== "projective" && !isLocal(r)) {
           // ワールドファイル（画素中心基準）：QGIS などでそのまま重ねられる
           const M = r.M;
           const [c, f] = M3.apply(M, 0.5, 0.5);
