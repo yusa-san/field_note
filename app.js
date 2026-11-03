@@ -368,7 +368,75 @@ function startGPS() {
     setStatusError("位置情報には HTTPS での配信が必要です");
     return;
   }
-  navigator.geolocation.watchPosition(onPosition, onPositionError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+  startWatch();
+  // 設定画面などで許可に変わったら、すぐ測位を再開
+  try {
+    navigator.permissions.query({ name: "geolocation" }).then((st) => {
+      st.onchange = () => { if (st.state === "granted") { startWatch(); closeGeoHelp(); } };
+    }, () => {});
+  } catch {}
+}
+let watchId = null;
+const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 };
+function startWatch() {
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, GEO_OPTS);
+}
+
+/**
+ * 現在地ボタンなどから：位置情報が使えなければ、そのたびに許可を求める。
+ * ブラウザの仕様で、一度「ブロック」した後はアプリから許可の画面を出せないため、その場合は手順を案内する。
+ */
+async function requestLocation() {
+  if (!("geolocation" in navigator) || !window.isSecureContext) return startGPS();
+  let state = null;
+  try { state = (await navigator.permissions.query({ name: "geolocation" })).state; } catch {}
+  if (state === "denied") return showGeoHelp();
+  toast("現在地を取得中…（許可を求められたら「許可」を選んでください）", 4000);
+  const t0 = Date.now();
+  navigator.geolocation.getCurrentPosition((p) => {
+    closeGeoHelp();
+    moveToFirstFix = false;
+    onPosition(p);
+    startWatch();
+    S.map.setView([S.pos.lat, S.pos.lon], Math.max(S.map.getZoom(), 16));
+  }, (err) => {
+    if (err.code === 1) {
+      setStatusError("位置情報の利用が許可されていません（現在地ボタンで再度許可できます）");
+      // 画面が出ずにすぐ拒否された＝ブロック中（または何度も閉じたため一時的に止められている）
+      if (Date.now() - t0 < 1500 || state === "denied") showGeoHelp();
+      else toast("位置情報の利用が許可されませんでした。もう一度現在地ボタンを押すと、再度確認します", 4000);
+    } else onPositionError(err);
+  }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+}
+
+let geoHelpOpen = false;
+function closeGeoHelp() {
+  if (geoHelpOpen) closeSheet(true);
+}
+function showGeoHelp() {
+  $("#toast").hidden = true;
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/i.test(ua), android = /Android/i.test(ua);
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone;
+  const steps = ios
+    ? [h("li", {}, "iPhone の「設定」→「プライバシーとセキュリティ」→「位置情報サービス」をオンにし、一覧の「Safari の Web サイト」を「使用中のみ」に"),
+      h("li", {}, standalone ? "それでも使えないときは、Safari でこのページを開き、アドレスバーの「ぁあ」→「Web サイトの設定」→「位置情報」を「許可」に（ホーム画面のアプリにも反映されます）" : "Safari のアドレスバーの「ぁあ」→「Web サイトの設定」→「位置情報」を「許可」に")]
+    : android
+      ? [h("li", {}, standalone
+          ? "ホーム画面のアプリのアイコンを長押し →「アプリ情報」（i のマーク）→「権限」→「位置情報」→「アプリの使用中のみ許可」"
+          : "アドレスバー左のアイコン（調整マーク）→「権限」→「位置情報」をオン"),
+        h("li", {}, "上で見つからないときは、Chrome を開いて「︙」→「設定」→「サイトの設定」→「位置情報」→「ブロック中」の一覧からこのサイトを選び「許可」に"),
+        h("li", {}, "スマホ本体の位置情報（クイック設定の「位置情報」）がオフになっていないかも確認")]
+      : [h("li", {}, "アドレスバー左のアイコン →「サイトの設定」→「位置情報」を「許可」に")];
+  const retry = h("button", { class: "btn primary block", type: "button", onclick: () => { closeGeoHelp(); requestLocation(); } }, "許可したので、もう一度試す");
+  const body = h("div", {},
+    h("p", { class: "note", style: "margin-top:0" }, "このアプリは位置情報の利用が「ブロック」になっています。ブラウザの仕組み上、一度ブロックすると、アプリから許可の確認画面を出し直すことができません。次の手順で許可してから「もう一度試す」を押してください。"),
+    h("ol", { class: "geo-steps" }, ...steps),
+    retry,
+    h("p", { class: "note" }, "許可すると、この画面は自動で閉じ、現在地の表示が始まります。"));
+  openSheet("位置情報の利用を許可してください", body, { onClose: () => (geoHelpOpen = false) });
+  geoHelpOpen = true;
 }
 
 let firstFix = true, moveToFirstFix = false;
@@ -396,7 +464,7 @@ function onPosition(p) {
   refreshListDistancesSoon();
 }
 function onPositionError(err) {
-  const msg = { 1: "位置情報の利用が許可されていません（ブラウザ設定を確認）", 2: "現在地を取得できません", 3: "現在地の取得がタイムアウトしました" }[err.code] || err.message;
+  const msg = { 1: "位置情報の利用が許可されていません（現在地ボタンで許可できます）", 2: "現在地を取得できません", 3: "現在地の取得がタイムアウトしました" }[err.code] || err.message;
   if (err.code === 1 || !S.pos) setStatusError(msg);
   else $("#gps-dot").className = "dot weak";
 }
@@ -2317,9 +2385,10 @@ function bindUI() {
   $("#btn-locate").onclick = () => {
     startOrientation();
     if (!S.pos) {
+      // 位置が取れていなければ、押すたびに許可を求める（ブロック中なら手順を案内）
       moveToFirstFix = true;
       firstFix = true;
-      return toast("現在地を取得中…");
+      return requestLocation();
     }
     if (S.follow) return setFollow(false);
     setFollow(true);
@@ -2340,7 +2409,7 @@ function bindUI() {
   $("#btn-menu").onclick = openMenu;
   $("#status").onclick = () => {
     const c = S.crosshair ? { lat: S.map.getCenter().lat, lon: S.map.getCenter().lng } : S.pos;
-    if (!c) return;
+    if (!c) return requestLocation();
     copyText(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`);
   };
   $("#status").title = "タップで座標をコピー";
