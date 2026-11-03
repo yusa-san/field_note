@@ -161,7 +161,7 @@ const DB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const rq = indexedDB.open("fieldnote", 2);
+      const rq = indexedDB.open("fieldnote", 3);
       rq.onupgradeneeded = () => {
         const db = rq.result;
         const has = (n) => db.objectStoreNames.contains(n);
@@ -171,6 +171,8 @@ const DB = {
         // v2: PDF から作った地図レイヤ（設定と画像を分けて保存し、透明度変更などで画像を書き直さない）
         if (!has("overlays")) db.createObjectStore("overlays", { keyPath: "id" });
         if (!has("overlayImages")) db.createObjectStore("overlayImages", { keyPath: "id" });
+        // v3: 聞き取りの録音
+        if (!has("audios")) db.createObjectStore("audios", { keyPath: "id" }).createIndex("memoId", "memoId");
       };
       rq.onsuccess = () => res((this.db = rq.result));
       rq.onerror = () => rej(rq.error);
@@ -198,21 +200,21 @@ const DB = {
 };
 
 const Settings = {
-  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false, corsProxy: "" },
+  data: { project: "", observer: "", categories: DEFAULT_CATEGORIES.slice(), lastExportAt: null, photoSize: "original", cameraOpenForm: false, corsProxy: "", catColors: {}, voiceMode: "both" },
   load() {
     try {
       Object.assign(this.data, JSON.parse(localStorage.getItem("fn.settings") || "{}"));
     } catch {}
     if (!Array.isArray(this.data.categories) || !this.data.categories.length) this.data.categories = DEFAULT_CATEGORIES.slice();
+    // 色はカテゴリごとに固定で持つ（以前は並び順で決めていたので、その色を引き継ぐ）
+    if (!this.data.catColors || typeof this.data.catColors !== "object") this.data.catColors = {};
+    this.data.categories.forEach((c, i) => { if (!this.data.catColors[c]) this.data.catColors[c] = PALETTE[i % PALETTE.length]; });
   },
   save() {
     try { localStorage.setItem("fn.settings", JSON.stringify(this.data)); } catch {}
   },
 };
-const catColor = (name) => {
-  const i = Settings.data.categories.indexOf(name);
-  return i >= 0 ? PALETTE[i % PALETTE.length] : "#616161";
-};
+const catColor = (name) => Settings.data.catColors?.[name] || "#616161";
 
 /* ====================================================================
  * 状態
@@ -684,6 +686,7 @@ function renderMarker(m) {
     el.querySelector('[data-pact="copy"]').onclick = () => copyText(`${cur.lat.toFixed(6)}, ${cur.lon.toFixed(6)}`);
     e.popup.setContent(el);
     loadPopupThumb(cur, el, e.popup);
+    loadPopupAudio(cur, el, e.popup);
   });
   S.markers.set(m.id, mk);
 }
@@ -709,6 +712,17 @@ async function loadPopupThumb(m, el, popup) {
   img.onclick = () => openViewer(photos.map((photo) => ({ photo, memo: m })), 0);
   box.replaceChildren(img);
   if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚（タップで表示）`));
+}
+/** ポップアップに録音の再生ボタン */
+async function loadPopupAudio(m, el, popup) {
+  if (!m.audioCount) return;
+  const au = (await DB.byIndex("audios", "memoId", m.id)).sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1));
+  if (!au.length) return;
+  const url = URL.createObjectURL(au[0].blob);
+  const box = h("div", { class: "paudio" }, h("audio", { controls: true, preload: "none", src: url }), au.length > 1 ? h("small", {}, `録音 ${au.length} 件（メモを開くと全部聞けます）`) : null);
+  el.querySelector(".pa").before(box);
+  popup.once("remove", () => URL.revokeObjectURL(url));
+  popup.update();
 }
 function thumbUrl(p) {
   if (!S.thumbUrls.has(p.id)) S.thumbUrls.set(p.id, URL.createObjectURL(p.thumb || p.blob));
@@ -825,20 +839,36 @@ async function memoForm(memo, isNew, saved, dirty) {
   };
   if (isNew || memo.elevation == null || !memo.address) lookup();
 
-  // カテゴリ
+  // カテゴリ（この画面で追加・編集・削除もできる）
   const chips = form.querySelector(".cat-chips");
-  const cats = Settings.data.categories.slice();
-  if (memo.category && !cats.includes(memo.category)) cats.push(memo.category);
-  for (const c of cats) {
-    const chip = h("button", { type: "button", class: "chip" + (c === memo.category ? " on" : "") }, h("i", { style: `background:${catColor(c)}` }), c);
-    chip.onclick = () => {
-      memo.category = c;
-      dirty = true;
-      $$(".chip", chips).forEach((x) => x.classList.remove("on"));
-      chip.classList.add("on");
-    };
-    chips.append(chip);
-  }
+  const mgrBox = form.querySelector(".cat-mgr-box");
+  const renderChips = () => {
+    chips.replaceChildren();
+    const cats = Settings.data.categories.slice();
+    if (memo.category && !cats.includes(memo.category)) cats.push(memo.category);
+    for (const c of cats) {
+      const chip = h("button", { type: "button", class: "chip" + (c === memo.category ? " on" : "") }, h("i", { style: `background:${catColor(c)}` }), c);
+      chip.onclick = () => {
+        memo.category = c;
+        dirty = true;
+        renderChips();
+      };
+      chips.append(chip);
+    }
+    const editing = !mgrBox.hidden;
+    chips.append(
+      h("button", { type: "button", class: "chip ghost", onclick: () => openMgr(true) }, "＋ 追加"),
+      h("button", { type: "button", class: "chip ghost" + (editing ? " on" : ""), onclick: () => (mgrBox.hidden ? openMgr(false) : closeMgr()) }, editing ? "編集を閉じる" : "編集"));
+  };
+  const onCatChange = (ev) => {
+    if (ev.type === "rename" && memo.category === ev.from) memo.category = ev.to;
+    if (ev.type === "delete" && memo.category === ev.from) memo.category = ev.to || Settings.data.categories[0];
+    if (ev.type === "add") { memo.category = ev.to; dirty = true; }
+    renderChips();
+  };
+  const openMgr = (focusAdd) => { mgrBox.replaceChildren(categoryManager(onCatChange, { focusAdd })); mgrBox.hidden = false; renderChips(); };
+  const closeMgr = () => { mgrBox.hidden = true; mgrBox.replaceChildren(); renderChips(); };
+  renderChips();
 
   // 撮影方向
   if (memo.heading != null) {
@@ -884,9 +914,9 @@ async function memoForm(memo, isNew, saved, dirty) {
     }
   };
   renderThumbs();
-  f.photo.onchange = async () => {
-    const files = Array.from(f.photo.files || []);
-    f.photo.value = "";
+  const addPhotos = async (input) => {
+    const files = Array.from(input.files || []);
+    input.value = "";
     for (const file of files) {
       try {
         const p = await processPhoto(file);
@@ -898,6 +928,27 @@ async function memoForm(memo, isNew, saved, dirty) {
       }
     }
   };
+  f.photoCam.onchange = () => addPhotos(f.photoCam);
+  f.photoPick.onchange = () => addPhotos(f.photoPick);
+
+  // 聞き取り（録音・書き起こし）
+  const existingAudios = isNew ? [] : await DB.byIndex("audios", "memoId", memo.id);
+  const newAudios = [];
+  const removedAudios = new Set();
+  const voice = voicePanel({
+    memo,
+    textarea: f.note,
+    markDirty: () => (dirty = true),
+    audios: () => existingAudios.filter((a) => !removedAudios.has(a.id)).concat(newAudios).sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1)),
+    onRecorded: (a) => { newAudios.push(a); dirty = true; },
+    onRemove: (id) => {
+      const i = newAudios.findIndex((a) => a.id === id);
+      if (i >= 0) newAudios.splice(i, 1);
+      else removedAudios.add(id);
+      dirty = true;
+    },
+  });
+  form.querySelector(".voice-box").append(voice.el);
 
   // ボタン
   const delBtn = form.querySelector('[data-act="delete"]');
@@ -923,6 +974,7 @@ async function memoForm(memo, isNew, saved, dirty) {
 
   form.onsubmit = async (e) => {
     e.preventDefault();
+    if (voice.isActive()) await voice.stop(); // 録音中なら止めて一緒に保存
     memo.title = f.title.value.trim();
     memo.note = f.note.value.trim();
     memo.tags = f.tags.value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean);
@@ -930,11 +982,14 @@ async function memoForm(memo, isNew, saved, dirty) {
     else if (!f.useHeading.checked) memo.heading = null;
     memo.updatedAt = nowIso();
     memo.photoCount = existingPhotos.filter((p) => !removed.has(p.id)).length + newPhotos.length;
+    memo.audioCount = existingAudios.filter((a) => !removedAudios.has(a.id)).length + newAudios.length;
     try {
       await DB.put("memos", memo);
       let order = existingPhotos.length;
       for (const p of newPhotos) await DB.put("photos", { ...p, order: order++ });
       for (const id of removed) await DB.del("photos", id);
+      for (const a of newAudios) await DB.put("audios", a);
+      for (const id of removedAudios) await DB.del("audios", id);
     } catch (err) {
       alert("保存に失敗しました：" + err.message);
       return;
@@ -949,7 +1004,8 @@ async function memoForm(memo, isNew, saved, dirty) {
   };
 
   openSheet(isNew ? "新しいメモ" : `メモ #${memo.no}`, form, {
-    guard: () => !dirty || saved || confirm("入力内容を破棄しますか？"),
+    guard: () => !dirty || saved || confirm(voice.isActive() ? "録音中です。録音と入力内容を破棄しますか？" : "入力内容を破棄しますか？"),
+    onClose: () => voice.dispose(),
   });
   if (isNew) setTimeout(() => f.title.focus({ preventScroll: true }), 250);
 }
@@ -957,6 +1013,7 @@ async function memoForm(memo, isNew, saved, dirty) {
 async function deleteMemo(id) {
   const photos = await DB.byIndex("photos", "memoId", id);
   for (const p of photos) await DB.del("photos", p.id);
+  for (const a of await DB.byIndex("audios", "memoId", id)) await DB.del("audios", a.id);
   await DB.del("memos", id);
   S.memos.delete(id);
   S.memoThumb.delete(id);
@@ -985,7 +1042,30 @@ let listState = { q: "", cat: "", sort: "new", view: "list" };
 let listRefresh = null;
 function openList() {
   const q = h("input", { type: "search", placeholder: "キーワードで絞り込み", value: listState.q });
-  const cat = h("select", {}, h("option", { value: "" }, "全カテゴリ"), ...Settings.data.categories.map((c) => h("option", { value: c, selected: c === listState.cat }, c)));
+  const cat = h("select", {});
+  const fillCats = () => {
+    if (listState.cat && !Settings.data.categories.includes(listState.cat)) listState.cat = "";
+    cat.replaceChildren(h("option", { value: "" }, "全カテゴリ"), ...Settings.data.categories.map((c) => h("option", { value: c, selected: c === listState.cat }, c)));
+  };
+  fillCats();
+  // 一覧からもカテゴリを編集できる
+  const catMgrBox = h("div", { class: "list-cat-mgr", hidden: true });
+  const catEditBtn = h("button", { type: "button", class: "chip" }, "カテゴリ編集");
+  catEditBtn.onclick = () => {
+    if (catMgrBox.hidden) {
+      catMgrBox.replaceChildren(categoryManager((ev) => {
+        if (ev.type === "rename" && listState.cat === ev.from) listState.cat = ev.to;
+        fillCats();
+        render();
+      }));
+      catMgrBox.hidden = false;
+      catEditBtn.classList.add("on");
+    } else {
+      catMgrBox.hidden = true;
+      catMgrBox.replaceChildren();
+      catEditBtn.classList.remove("on");
+    }
+  };
   const sort = h("select", {},
     h("option", { value: "new", selected: listState.sort === "new" }, "新しい順"),
     h("option", { value: "no", selected: listState.sort === "no" }, "番号順"),
@@ -1149,7 +1229,7 @@ function openList() {
         lead,
         h("div", {},
           h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${catColor(m.category)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
-          h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `📷${m.photoCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
+          h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `📷${m.photoCount}` : "", m.audioCount ? `🎙${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
           m.note ? h("div", { class: "n" }, m.note) : null),
         dcell);
       item.onclick = (e) => {
@@ -1171,7 +1251,7 @@ function openList() {
   cat.onchange = render;
   sort.onchange = render;
   listRefresh = () => { if (!selecting) render(); };
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort), list, bar), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, list, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
@@ -1419,7 +1499,15 @@ async function buildJSON(photoMode = "none") {
       if (photoMode === "file") files.push({ path: o.file, blob: p.blob, date: new Date(p.takenAt || m.createdAt) });
       photos.push(o);
     }
-    out.push({ ...memoOut(m), photos });
+    const audios = [];
+    for (const [i, a] of (await DB.byIndex("audios", "memoId", m.id)).sort((x, y) => (x.createdAt > y.createdAt ? 1 : -1)).entries()) {
+      const filename = `memo${String(m.no).padStart(3, "0")}_rec${i + 1}.${audioExt(a.mime)}`;
+      const o = { id: a.id, filename, file: `audio/${filename}`, mime: a.mime, duration: a.duration, createdAt: a.createdAt, bytes: a.blob.size };
+      if (photoMode === "dataUrl") o.dataUrl = await blobToDataURL(a.blob);
+      if (photoMode === "file") files.push({ path: o.file, blob: a.blob, date: new Date(a.createdAt) });
+      audios.push(o);
+    }
+    out.push({ ...memoOut(m), photos, audios });
   }
   const tracks = (await exportTracks()).map((t) => ({ ...t, pointFields: ["lat", "lon", "time_ms", "accuracy_m", "altitude_m"] }));
   return {
@@ -1455,7 +1543,7 @@ function buildGeoJSON(tracks, photoFiles) {
   return { type: "FeatureCollection", name: Settings.data.project || "fieldnote", features };
 }
 function buildCSV(photoFiles) {
-  const cols = ["no", "title", "category", "note", "tags", "lat", "lon", "accuracy", "elevation", "address", "mesh", "heading", "source", "photoCount", "createdAt", "updatedAt", "id"];
+  const cols = ["no", "title", "category", "note", "tags", "lat", "lon", "accuracy", "elevation", "address", "mesh", "heading", "source", "photoCount", "audioCount", "createdAt", "updatedAt", "id"];
   if (photoFiles) cols.splice(cols.indexOf("photoCount") + 1, 0, "photos");
   const q = (v) => {
     v = Array.isArray(v) ? v.join(";") : v ?? "";
@@ -1692,7 +1780,7 @@ async function importData(data, getPhotoBlob) {
   let no = nextNo();
   for (const raw of memos) {
     if (typeof raw.lat !== "number" || typeof raw.lon !== "number") { skipped++; continue; }
-    const { photos: ph, ...m } = raw;
+    const { photos: ph, audios: au, ...m } = raw;
     m.id = m.id || uuid();
     m.createdAt = m.createdAt || nowIso();
     m.updatedAt = m.updatedAt || m.createdAt;
@@ -1715,6 +1803,16 @@ async function importData(data, getPhotoBlob) {
       cnt = (await DB.byIndex("photos", "memoId", m.id)).length;
     }
     m.photoCount = cnt;
+    if (Array.isArray(au)) {
+      for (const a of au) {
+        try {
+          const blob = (await getPhotoBlob({ file: a.file, mime: a.mime })) || (a.dataUrl ? await (await fetch(a.dataUrl)).blob() : null);
+          if (!blob) continue;
+          await DB.put("audios", { id: a.id || uuid(), memoId: m.id, blob: new Blob([blob], { type: a.mime || blob.type }), mime: a.mime || blob.type, duration: a.duration || 0, createdAt: a.createdAt || m.createdAt });
+        } catch {}
+      }
+      m.audioCount = (await DB.byIndex("audios", "memoId", m.id)).length;
+    }
     await DB.put("memos", m);
     cur ? updated++ : added++;
   }
@@ -1816,7 +1914,7 @@ async function openMenu() {
 
   const proj = h("input", { type: "text", value: Settings.data.project, placeholder: "例：犬山城下町 2026秋" });
   const obs = h("input", { type: "text", value: Settings.data.observer, placeholder: "例：山田" });
-  const cats = h("input", { type: "text", value: Settings.data.categories.join(", ") });
+  const cats = categoryManager(() => {});
   const psize = h("select", {}, ...Object.entries(PHOTO_SIZES).map(([v, t]) => h("option", { value: v, selected: String(Settings.data.photoSize) === v }, t)));
   const openForm = h("input", { type: "checkbox", checked: !!Settings.data.cameraOpenForm });
   const proxyIn = h("input", { type: "text", value: Settings.data.corsProxy || "", placeholder: "例：https://example.workers.dev/?url={url}", inputmode: "url" });
@@ -1826,8 +1924,6 @@ async function openMenu() {
     Settings.data.corsProxy = proxyIn.value.trim();
     Settings.data.project = proj.value.trim();
     Settings.data.observer = obs.value.trim();
-    const c = cats.value.split(/[,、，]/).map((s) => s.trim()).filter(Boolean);
-    Settings.data.categories = c.length ? [...new Set(c)] : DEFAULT_CATEGORIES.slice();
     Settings.save();
     for (const m of S.memos.values()) renderMarker(m);
     toast("設定を保存しました");
@@ -1903,7 +1999,7 @@ async function openMenu() {
     h("div", { class: "sect-title" }, "調査の設定"),
     h("label", {}, "調査名（ファイル名とメモに記録）", proj),
     h("label", {}, "記録者", obs),
-    h("label", {}, "カテゴリ（カンマ区切り・順に色が決まります）", cats),
+    h("div", { class: "lbl-plain" }, "カテゴリ"), cats,
     h("label", {}, "写真の保存サイズ（端末内）", psize),
     h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
     h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn),
@@ -1924,7 +2020,7 @@ async function openMenu() {
     h("button", { class: "btn danger block", type: "button", onclick: async () => {
       if (!confirm("全てのメモ・写真・軌跡を端末から削除します。書き出し済みか確認してください。")) return;
       if (!confirm("本当に削除しますか？元に戻せません。")) return;
-      await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks");
+      await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks"); await DB.clear("audios");
       for (const l of S.shownTracks.values()) S.map.removeLayer(l);
       S.shownTracks.clear();
       await loadMemos();

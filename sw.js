@@ -2,14 +2,14 @@
  * - アプリ本体: ネットワーク優先（更新をすぐ反映）、オフライン時はキャッシュ
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの
 const RT_MAX = 4000;
 
 const SHELL_FILES = [
-  "./", "index.html", "style.css", "georef.js", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+  "./", "index.html", "style.css", "georef.js", "memo-tools.js", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
   "https://maps.gsi.go.jp/js/muni.js",

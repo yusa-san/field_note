@@ -383,3 +383,38 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .chip.sel-toggle.on { background: var(--danger); border-color: var(--danger); }
 .memo-pin.hl div, .photo-pin.hl .pp { animation: hl 0.9s ease-in-out infinite; }
 @keyframes hl { 50% { box-shadow: 0 0 0 8px rgba(255, 212, 0, .85); } }
+
+/* メモ画面：写真ボタン */
+.photo-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.photo-btns .file-btn { text-align: center; padding: 11px 6px; font-size: 14px !important; }
+/* カテゴリ管理 */
+.chip.ghost { border-style: dashed; color: var(--fg-2); }
+.chip.ghost.on { border-style: solid; color: #fff; }
+.cat-mgr-box { margin-top: 8px; }
+.cat-mgr { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--bg-2); }
+.cat-row { display: grid; grid-template-columns: 28px 1fr auto 32px 32px; gap: 6px; align-items: center; padding: 3px 0; }
+.cat-row input { margin: 0; padding: 6px 8px; background: var(--bg); }
+.cat-dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); padding: 0; cursor: pointer; }
+.cat-n { font-size: 12px; color: var(--fg-2); min-width: 2.5em; text-align: right; }
+.icon-mini { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); padding: 0; font-size: 14px; cursor: pointer; }
+.icon-mini.danger { color: var(--danger); }
+.cat-add { display: flex; gap: 6px; margin-top: 6px; }
+.cat-add input { margin: 0; padding: 6px 8px; background: var(--bg); }
+.list-cat-mgr { margin-bottom: 8px; }
+.lbl-plain { font-size: 12.5px; color: var(--fg-2); margin: 10px 0 4px; }
+/* 聞き取り */
+.voice { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.voice-row { display: flex; gap: 6px; align-items: center; }
+.voice-btn { flex: 1; font-weight: 600; }
+.voice-btn.recording { background: var(--danger); border-color: var(--danger); color: #fff; animation: pulse 1.6s infinite; }
+.voice-mode { width: auto; margin: 0; padding: 9px 6px; font-size: 13px; }
+.voice-live { font-size: 13px; color: var(--fg-2); font-style: italic; background: var(--bg-2); border-radius: 8px; padding: 6px 8px; }
+.voice-status:empty { display: none; }
+.voice-status { font-size: 12.5px; }
+.voice-status.warn { color: #9a5b00; }
+.audio-list { display: flex; flex-direction: column; gap: 4px; }
+.audio-row { display: grid; grid-template-columns: 1fr auto 32px; gap: 6px; align-items: center; }
+.audio-row audio { width: 100%; height: 36px; }
+.audio-meta { font-size: 11.5px; color: var(--fg-2); white-space: nowrap; }
+.paudio audio { width: 220px; height: 34px; margin-top: 6px; }
+.paudio small { display: block; color: #666; }
