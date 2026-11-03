@@ -363,3 +363,23 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .gr-search { display: flex; gap: 6px; align-items: center; }
 .gr-search input { margin: 0; padding: 6px 10px; font-size: 16px; }
 .gr-local { display: flex; align-items: center; font-size: 13.5px !important; color: var(--fg) !important; margin: 0 !important; gap: 8px; }
+
+/* 一覧の選択モード */
+.memo-item.selecting { grid-template-columns: 24px 1fr; }
+.memo-item.picked { background: rgba(47, 138, 107, .12); }
+.sel-cb { margin: 2px 0 0; pointer-events: none; }
+.dot-i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.sel-bar {
+  position: sticky; bottom: calc(-16px - var(--safe-bottom)); margin: 10px -14px -16px; padding: 10px 14px calc(12px + var(--safe-bottom));
+  background: var(--bg); border-top: 1px solid var(--line); box-shadow: 0 -4px 12px rgba(0, 0, 0, .08); display: flex; flex-direction: column; gap: 8px;
+}
+.sel-head { display: flex; align-items: center; gap: 8px; }
+.sel-head b { flex: 1; font-size: 14px; }
+.sel-panel:empty { display: none; }
+.sel-panel { border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.sel-form { display: flex; gap: 6px; align-items: center; }
+.sel-form input { margin: 0; }
+.chip.danger { color: var(--danger); border-color: var(--danger); }
+.chip.sel-toggle.on { background: var(--danger); border-color: var(--danger); }
+.memo-pin.hl div, .photo-pin.hl .pp { animation: hl 0.9s ease-in-out infinite; }
+@keyframes hl { 50% { box-shadow: 0 0 0 8px rgba(255, 212, 0, .85); } }
