@@ -722,6 +722,7 @@ function openLayers() {
     h("div", { class: "sect-title" }, "ベース地図：地理院 Vector"), vtRow,
     h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
+    h("div", { class: "sect-title" }, "標高（1m 標高タイル）"), demPanelRow(),
     h("div", { class: "sect-title" }, "PDF から追加した地図"), pdfLayersSection(),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),
   );
@@ -1956,7 +1957,8 @@ function tilesInView(def, zFrom, zTo) {
 }
 async function prefetchTiles(statusEl) {
   if (!("caches" in window)) return alert("この端末ではオフライン保存に対応していません");
-  const defs = [BASE_LAYERS.find((b) => b.id === S.baseId), ...Object.keys(S.overlays).map((id) => OVERLAYS.find((o) => o.id === id))].filter(Boolean);
+  const defs = [BASE_LAYERS.find((b) => b.id === S.baseId), ...Object.keys(S.overlays).map((id) => OVERLAYS.find((o) => o.id === id)),
+    demCfg().on ? { url: DEM_SOURCES[0].url, max: 17 } : null].filter(Boolean);
   if (defs.some((d) => d.noPrefetch)) return alert("OpenStreetMap は利用規約により一括保存できません。地理院の地図に切り替えてください");
   const z0 = Math.floor(S.map.getZoom());
   let urls = [];
@@ -2462,6 +2464,7 @@ async function main() {
   Settings.load();
   bindUI();
   moveToFirstFix = initMap();
+  demRestore();
   try {
     await resumeTrackIfAny();
     await loadMemos();
