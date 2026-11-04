@@ -271,6 +271,9 @@ function pointInPolygon(x, y, poly) {
   return inside;
 }
 const isLocal = (rec) => rec.warp === "local" && rec.mesh;
+/** 元資料の種類の表示（PDF はページ番号、画像は「画像」） */
+const srcLabel = (rec) => (rec.page ? `p.${rec.page}` : "画像");
+const isPdfRec = (rec) => !!rec.page;
 
 /* ====================================================================
  * 地図レイヤの描画
@@ -553,14 +556,14 @@ function pdfLayerClick(latlng) {
       if (u < 0 || v < 0 || u > it.rec.width || v > it.rec.height) continue;
     }
     const r = it.rec;
-    const link = r.sourceUrl ? `${r.sourceUrl}${/\.pdf($|\?)/i.test(r.sourceUrl) && !r.sourceUrl.includes("#") ? `#page=${r.page}` : ""}` : null;
+    const link = r.sourceUrl ? `${r.sourceUrl}${isPdfRec(r) && /\.pdf($|\?)/i.test(r.sourceUrl) && !r.sourceUrl.includes("#") ? `#page=${r.page}` : ""}` : null;
     const el = h("div", {},
-      h("div", { class: "pt" }, r.title || "PDF 地図"),
-      h("div", { class: "ps" }, [`p.${r.page}`, r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("　")),
-      link ? h("div", { style: "margin-top:4px;word-break:break-all" }, h("a", { href: link, target: "_blank", rel: "noopener" }, "元の PDF を開く")) : h("div", { class: "ps" }, "（出典 URL 未登録）"),
+      h("div", { class: "pt" }, r.title || "重ねた地図"),
+      h("div", { class: "ps" }, [srcLabel(r), r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("　")),
+      link ? h("div", { style: "margin-top:4px;word-break:break-all" }, h("a", { href: link, target: "_blank", rel: "noopener" }, isPdfRec(r) ? "元の PDF を開く" : "参照 URL を開く")) : h("div", { class: "ps" }, "（参照 URL 未登録・「名前・参照 URL」で設定）"),
       h("div", { class: "pa" },
         h("button", { type: "button", onclick: () => { S.map.closePopup(); setPdfVisible(r.id, false); toast("非表示にしました（地図の切替から戻せます）"); } }, "非表示"),
-        h("button", { type: "button", onclick: () => { S.map.closePopup(); openPdfLayerEdit(r.id); } }, "名前・出典"),
+        h("button", { type: "button", onclick: () => { S.map.closePopup(); openPdfLayerEdit(r.id); } }, "名前・参照 URL"),
         h("button", { type: "button", onclick: () => { S.map.closePopup(); openGeoref({ existing: r.id }); } }, "位置合わせ")));
     L.popup({ maxWidth: 280 }).setLatLng(latlng).setContent(el).openOn(S.map);
     return true;
@@ -593,17 +596,17 @@ function pdfLayersSection() {
       const act = (label, fn) => h("button", { type: "button", class: "chip", onclick: fn }, label);
       box.append(h("div", { class: "pdf-row" },
         h("div", { class: "ov-row", style: "border:0;padding-bottom:2px" }, cb,
-          h("div", {}, r.title || "PDF 地図", h("small", {}, [`p.${r.page}`, r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("・"))), rg),
+          h("div", {}, r.title || "重ねた地図", h("small", {}, [srcLabel(r), r.sourceName, isLocal(r) ? "部分ごと" : "", r.fit?.rms != null ? `${isLocal(r) ? "検証誤差" : "誤差"} 約${r.fit.rms.toFixed(1)} m` : ""].filter(Boolean).join("・"))), rg),
         h("div", { class: "chips" },
           toggle("gray", "モノクロ"), toggle("multiply", "白を透過"),
           act("範囲へ", () => { closeSheet(true); setFollow(false); if (r.visible === false) setPdfVisible(r.id, true); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }),
           act("位置合わせ", () => { closeSheet(true); openGeoref({ existing: r.id }); }),
-          act("名前・出典", () => openPdfLayerEdit(r.id)),
+          act("名前・参照 URL", () => openPdfLayerEdit(r.id)),
           act("GeoTIFF 保存", () => exportPdfLayerGeoTiff(r.id)),
           act("削除", async () => { if (!confirm(`「${r.title}」を削除しますか？`)) return; await deletePdfLayer(r.id); render(); }))));
     }
-    if (!items.length) box.append(h("p", { class: "note" }, "河川整備計画などの PDF の地図を、位置を合わせて重ねられます。"));
-    box.append(h("button", { type: "button", class: "btn secondary block", onclick: () => { closeSheet(true); openPdfSource(); } }, "＋ PDF から地図を追加"));
+    if (!items.length) box.append(h("p", { class: "note" }, "河川整備計画などの PDF や、地図の画像（スクリーンショット・スキャン）を、位置を合わせて重ねられます。"));
+    box.append(h("button", { type: "button", class: "btn secondary block", onclick: () => { closeSheet(true); openPdfSource(); } }, "＋ PDF・画像から地図を追加"));
   };
   render();
   return box;
@@ -614,19 +617,21 @@ function openPdfLayerEdit(id) {
   if (!it) return;
   const r = it.rec;
   const title = h("input", { type: "text", value: r.title || "" });
-  const url = h("input", { type: "text", value: r.sourceUrl || "", placeholder: "https://…/xxx.pdf", inputmode: "url" });
-  const form = h("form", {}, h("label", {}, "名前", title), h("label", {}, "出典 URL（ポップアップのリンク先）", url),
-    h("p", { class: "note" }, `元ファイル：${r.sourceName || "—"}　ページ：${r.page}　画像：${r.width}×${r.height}px　変換：${isLocal(r) ? "部分ごとに合わせる" : r.fit?.method === "projective" ? "射影" : "アフィン"}（${r.gcps.length}点）`),
+  const url = h("input", { type: "text", value: r.sourceUrl || "", placeholder: isPdfRec(r) ? "https://…/xxx.pdf" : "https://…（元の資料・ページ）", inputmode: "url" });
+  const form = h("form", {}, h("label", {}, "名前", title), h("label", {}, "参照 URL（ポップアップのリンク先）", url),
+    h("p", { class: "note" }, `元ファイル：${r.sourceName || "—"}　${isPdfRec(r) ? `ページ：${r.page}` : "種類：画像"}　画像：${r.width}×${r.height}px　変換：${isLocal(r) ? "部分ごとに合わせる" : r.fit?.method === "projective" ? "射影" : "アフィン"}（${r.gcps.length}点）`),
     h("button", { class: "btn primary block", type: "submit" }, "保存"));
   form.onsubmit = async (e) => {
     e.preventDefault();
     r.title = title.value.trim() || r.title;
-    r.sourceUrl = url.value.trim() || null;
+    const u = url.value.trim();
+    if (u && !/^https?:\/\//i.test(u)) return alert("参照 URL は http:// または https:// で始めてください");
+    r.sourceUrl = u || null;
     await DB.put("overlays", r);
     closeSheet(true);
     toast("保存しました");
   };
-  openSheet("PDF 地図の情報", form);
+  openSheet("重ねた地図の情報", form);
 }
 
 /* ====================================================================
@@ -649,13 +654,27 @@ function loadPdfJs() {
   return pdfjsPromise;
 }
 
-async function fetchPdfBytes(url) {
+/** 先頭のバイトからファイルの種類を判定 */
+function sniffKind(buf) {
+  const a = (i) => buf[i];
+  if (String.fromCharCode(...buf.slice(0, 5)) === "%PDF-") return "pdf";
+  if (a(0) === 0x89 && a(1) === 0x50 && a(2) === 0x4e && a(3) === 0x47) return "image/png";
+  if (a(0) === 0xff && a(1) === 0xd8) return "image/jpeg";
+  if (String.fromCharCode(...buf.slice(0, 4)) === "GIF8") return "image/gif";
+  if (String.fromCharCode(...buf.slice(0, 4)) === "RIFF" && String.fromCharCode(...buf.slice(8, 12)) === "WEBP") return "image/webp";
+  if (String.fromCharCode(...buf.slice(4, 12)).startsWith("ftyp")) return "image/avif";
+  if (a(0) === 0x42 && a(1) === 0x4d) return "image/bmp";
+  return null;
+}
+/** URL から PDF または画像を取得。{ bytes, kind } */
+async function fetchSourceBytes(url) {
   const tryFetch = async (u) => {
     const r = await fetch(u, { mode: "cors", credentials: "omit" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (String.fromCharCode(...buf.slice(0, 5)) !== "%PDF-") throw new Error("PDF ではありません");
-    return buf;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const kind = sniffKind(bytes);
+    if (!kind) throw new Error("PDF または画像ではありません");
+    return { bytes, kind };
   };
   try {
     return await tryFetch(url);
@@ -667,56 +686,114 @@ async function fetchPdfBytes(url) {
   }
 }
 
-/** 手順1：PDF を指定（ファイル or URL） */
+/** 手順1：PDF・画像を指定（ファイル・貼り付け・URL） */
 function openPdfSource(prefillUrl = "") {
   const fileIn = h("input", { type: "file", accept: "application/pdf,.pdf", hidden: true });
-  const url = h("input", { type: "text", placeholder: "https://…/seibikeikaku.pdf", value: prefillUrl, inputmode: "url", autocomplete: "off" });
+  const imgIn = h("input", { type: "file", accept: "image/*", hidden: true });
+  const url = h("input", { type: "text", placeholder: "https://…/seibikeikaku.pdf（画像の URL も可）", value: prefillUrl, inputmode: "url", autocomplete: "off" });
   const status = h("div", { class: "note" });
   const help = h("div");
-  const start = async (bytes, name, sourceUrl) => {
+  const refUrl = () => (/^https?:\/\//i.test(url.value.trim()) ? url.value.trim() : null);
+  const startPdf = async (bytes, name, sourceUrl) => {
     status.textContent = "PDF を開いています…";
     try {
       const lib = await loadPdfJs();
       // 日本語の PDF は CMap（文字コード表）がないと文字が描画されない
       const pdf = await lib.getDocument({ data: bytes, cMapUrl: PDFJS_BASE + "cmaps/", cMapPacked: true, standardFontDataUrl: PDFJS_BASE + "standard_fonts/" }).promise;
-      openPdfPages({ pdf, name, sourceUrl });
+      openPdfPages({ kind: "pdf", pdf, name, sourceUrl });
     } catch (e) {
       status.textContent = e.name === "PasswordException" ? "パスワード付きの PDF は読み込めません" : "PDF を開けませんでした：" + e.message;
+    }
+  };
+  const startImage = async (blob, name, sourceUrl) => {
+    status.textContent = "画像を開いています…";
+    try {
+      const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+      if (bmp.width < 16 || bmp.height < 16) throw new Error("画像が小さすぎます");
+      cleanupPaste();
+      closeSheet(true);
+      grCrop({ kind: "image", bmp, name, sourceUrl }, null);
+    } catch (e) {
+      status.textContent = "画像を開けませんでした：" + (e.message || e.name);
     }
   };
   fileIn.onchange = async () => {
     const f = fileIn.files[0];
     fileIn.value = "";
-    if (f) start(new Uint8Array(await f.arrayBuffer()), f.name, url.value.trim() || null);
+    if (f) startPdf(new Uint8Array(await f.arrayBuffer()), f.name, refUrl());
   };
+  imgIn.onchange = () => {
+    const f = imgIn.files[0];
+    imgIn.value = "";
+    if (f) startImage(f, f.name, refUrl());
+  };
+  const pastedName = (type) => `貼り付けた画像_${stamp()}.${extOf(type)}`;
+  // 貼り付け：ボタン（クリップボードを読む）・貼り付け欄（長押し→貼り付け）・Ctrl+V
+  const fromClipboardItems = async () => {
+    status.textContent = "";
+    if (!navigator.clipboard || !navigator.clipboard.read) return (status.textContent = "このブラウザはボタンでの貼り付けに対応していません。下の欄を長押しして「貼り付け」してください");
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith("image/"));
+        if (type) return startImage(await item.getType(type), pastedName(type), refUrl());
+      }
+      status.textContent = "クリップボードに画像がありません（画像をコピーしてから押してください）";
+    } catch (e) {
+      status.textContent = e.name === "NotAllowedError" ? "クリップボードの読み取りが許可されませんでした。下の欄を長押しして「貼り付け」してください" : "貼り付けできませんでした：" + e.message;
+    }
+  };
+  const onPaste = (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+    const item = files[0] || [...(e.clipboardData?.items || [])].find((it) => it.kind === "file" && it.type.startsWith("image/"))?.getAsFile();
+    if (!item) {
+      if (e.target === pasteBox) { e.preventDefault(); status.textContent = "貼り付けた内容に画像がありません"; }
+      return;
+    }
+    e.preventDefault();
+    startImage(item, item.name && item.name !== "image.png" ? item.name : pastedName(item.type), refUrl());
+  };
+  const pasteBox = h("div", { class: "paste-box", contenteditable: "true", role: "textbox", "aria-label": "画像の貼り付け欄", inputmode: "none" });
+  pasteBox.dataset.ph = "ここを長押し（PC はクリックして Ctrl+V）→「貼り付け」";
+  pasteBox.addEventListener("input", () => (pasteBox.textContent = "")); // 文字は入れない
+  document.addEventListener("paste", onPaste);
+  const cleanupPaste = () => document.removeEventListener("paste", onPaste);
+
   const loadUrl = async () => {
     const u = url.value.trim();
     if (!/^https?:\/\//i.test(u)) return (status.textContent = "http(s):// で始まる URL を入力してください");
     status.textContent = "ダウンロード中…";
     help.replaceChildren();
     try {
-      const bytes = await fetchPdfBytes(u);
-      start(bytes, decodeURIComponent(u.split(/[?#]/)[0].split("/").pop() || "document.pdf"), u);
-    } catch {
+      const { bytes, kind } = await fetchSourceBytes(u);
+      const name = decodeURIComponent(u.split(/[?#]/)[0].split("/").pop() || (kind === "pdf" ? "document.pdf" : "image"));
+      if (kind === "pdf") startPdf(bytes, name, u);
+      else startImage(new Blob([bytes], { type: kind }), name, u);
+    } catch (e) {
       status.textContent = "";
+      if (/PDF または画像/.test(e.message)) return (status.textContent = "この URL は PDF・画像ではないようです（Web ページの URL は、上の欄に入れて参照 URL として使えます）");
       // 多くの官公庁サイトは CORS を許可していないため、ブラウザから直接は取得できない
       help.replaceChildren(h("div", { class: "warn" },
         h("b", {}, "このサイトからは直接読み込めませんでした。"),
-        h("div", {}, "サイト側が他のページからの読み込みを許可していないためです。次の手順で読み込めます（URL は出典リンクとして保存されます）。"),
-        h("ol", {}, h("li", {}, "下のボタンで PDF を開き、端末にダウンロード"), h("li", {}, "「ダウンロードした PDF を選ぶ」でそのファイルを選択")),
+        h("div", {}, "サイト側が他のページからの読み込みを許可していないためです。次の手順で読み込めます（URL は参照 URL として保存されます）。"),
+        h("ol", {}, h("li", {}, "下のボタンでファイルを開き、端末にダウンロード"), h("li", {}, "「ダウンロードしたファイルを選ぶ」でそのファイルを選択")),
         h("div", { class: "menu-grid" },
-          h("a", { class: "btn secondary", href: u, target: "_blank", rel: "noopener" }, "PDF を開く"),
-          h("button", { class: "btn primary", type: "button", onclick: () => fileIn.click() }, "ダウンロードした PDF を選ぶ"))));
+          h("a", { class: "btn secondary", href: u, target: "_blank", rel: "noopener" }, "ファイルを開く"),
+          h("button", { class: "btn primary", type: "button", onclick: () => (/\.pdf($|\?)/i.test(u) ? fileIn : imgIn).click() }, "ダウンロードしたファイルを選ぶ"))));
     }
   };
   const body = h("div", {},
-    h("button", { class: "btn primary block", type: "button", onclick: () => fileIn.click() }, "PDF ファイルを選ぶ"), fileIn,
-    h("div", { class: "sect-title" }, "または URL から"),
+    h("div", { class: "menu-grid" },
+      h("button", { class: "btn primary", type: "button", onclick: () => fileIn.click() }, "PDF を選ぶ"),
+      h("button", { class: "btn primary", type: "button", onclick: () => imgIn.click() }, "画像を選ぶ")), fileIn, imgIn,
+    h("div", { class: "sect-title" }, "画像を貼り付け"),
+    h("button", { class: "btn secondary block", type: "button", onclick: fromClipboardItems }, "コピーした画像を貼り付け"),
+    pasteBox,
+    h("div", { class: "sect-title" }, "URL から（または参照 URL）"),
     url,
     h("button", { class: "btn secondary block", type: "button", onclick: loadUrl }, "URL から読み込む"),
     status, help,
-    h("p", { class: "note" }, "ファイルで選ぶ場合も、上の欄に元の URL を入れておくと、地図のポップアップから元の PDF に飛べます（後から「名前・出典」でも設定可）。"));
-  openSheet("PDF から地図を追加", body);
+    h("p", { class: "note" }, "ファイル選択や貼り付けの場合も、上の欄に元の資料の URL を入れておくと、地図のポップアップから元の資料に飛べます。後から「名前・参照 URL」で設定・変更することもできます。"));
+  openSheet("PDF・画像から地図を追加", body, { onClose: cleanupPaste });
 }
 
 /** 手順2：ページを選ぶ */
@@ -798,24 +875,49 @@ async function openGeoref(opts) {
   grCrop(opts.src, opts.page);
 }
 
-/** 手順3：切り出し範囲を決める */
-async function grCrop(src, pageNo) {
-  const ui = grOpenShell(`切り出し（p.${pageNo}）`);
-  ui.body.append(h("div", { class: "empty" }, "ページを描画中…"));
+/** 切り出しの元になる 1 枚（PDF のページ または 画像）を共通の形にする
+ *  w,h：元の大きさ（PDF は pt、画像は px）、maxScale：書き出しで拡大できる上限 */
+async function grSourcePage(src, pageNo) {
+  if (src.kind === "image") {
+    const bmp = src.bmp;
+    return {
+      w: bmp.width, h: bmp.height, maxScale: 1,
+      async render(ctx, scale, offX, offY) { ctx.drawImage(bmp, -offX * scale, -offY * scale, bmp.width * scale, bmp.height * scale); },
+      cleanup() {},
+    };
+  }
   const page = await src.pdf.getPage(pageNo);
   const vp1 = page.getViewport({ scale: 1 });
-  const sc = GR_PREVIEW_SIDE / Math.max(vp1.width, vp1.height);
-  const vp = page.getViewport({ scale: sc });
+  return {
+    w: vp1.width, h: vp1.height, maxScale: 12,
+    async render(ctx, scale, offX, offY) {
+      await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale, offsetX: -offX * scale, offsetY: -offY * scale }) }).promise;
+    },
+    cleanup() { page.cleanup(); },
+  };
+}
+function grSourceDone(src) {
+  if (src.kind === "image") { try { src.bmp.close(); } catch {} }
+  else if (src.pdf) src.pdf.destroy();
+}
+
+/** 手順3：切り出し範囲を決める */
+async function grCrop(src, pageNo) {
+  const isImg = src.kind === "image";
+  const ui = grOpenShell(isImg ? "切り出し（画像）" : `切り出し（p.${pageNo}）`);
+  ui.body.append(h("div", { class: "empty" }, isImg ? "画像を準備中…" : "ページを描画中…"));
+  const pg = await grSourcePage(src, pageNo);
+  const sc = Math.min(GR_PREVIEW_SIDE / Math.max(pg.w, pg.h), isImg ? 1 : 99);
   const canvas = h("canvas", { class: "gr-crop-canvas" });
-  canvas.width = Math.ceil(vp.width);
-  canvas.height = Math.ceil(vp.height);
+  canvas.width = Math.ceil(pg.w * sc);
+  canvas.height = Math.ceil(pg.h * sc);
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  await pg.render(ctx, sc, 0, 0);
   if (!GR.el) return;
 
-  const crop = { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 }; // ページに対する割合
+  const crop = isImg ? { x0: 0, y0: 0, x1: 1, y1: 1 } : { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 }; // 元に対する割合
   const rect = h("div", { class: "gr-crop-rect" }, ...["nw", "ne", "se", "sw"].map((k) => h("i", { class: "gr-h " + k, "data-k": k })));
   const stage = h("div", { class: "gr-crop-stage" }, canvas, rect);
   ui.body.replaceChildren(stage);
@@ -834,10 +936,10 @@ async function grCrop(src, pageNo) {
     info.textContent = `出力 約 ${outSize().slice(0, 2).join("×")} px`;
   };
   const outSize = () => {
-    const cw = (crop.x1 - crop.x0) * vp1.width, ch = (crop.y1 - crop.y0) * vp1.height;
-    let s = Math.min(GR_MAX_SIDE / Math.max(cw, ch), 12);
+    const cw = (crop.x1 - crop.x0) * pg.w, ch = (crop.y1 - crop.y0) * pg.h;
+    let s = Math.min(GR_MAX_SIDE / Math.max(cw, ch), pg.maxScale);
     if (cw * ch * s * s > GR_MAX_AREA) s = Math.sqrt(GR_MAX_AREA / (cw * ch));
-    return [Math.round(cw * s), Math.round(ch * s), s];
+    return [Math.max(1, Math.round(cw * s)), Math.max(1, Math.round(ch * s)), s];
   };
   // ドラッグ：角のハンドルでサイズ変更、枠の中で移動
   let drag = null;
@@ -879,14 +981,15 @@ async function grCrop(src, pageNo) {
       const octx = out.getContext("2d");
       octx.fillStyle = "#fff";
       octx.fillRect(0, 0, w, hh);
-      const v = page.getViewport({ scale: s, offsetX: -crop.x0 * vp1.width * s, offsetY: -crop.y0 * vp1.height * s });
-      await page.render({ canvasContext: octx, viewport: v }).promise;
+      octx.imageSmoothingQuality = "high";
+      await pg.render(octx, s, crop.x0 * pg.w, crop.y0 * pg.h);
       const blob = await new Promise((r) => out.toBlob(r, "image/jpeg", 0.9));
       out.width = out.height = 0;
+      const baseName = src.name.replace(/\.(pdf|png|jpe?g|gif|webp|avif|bmp|heic)$/i, "");
       const rec = {
-        id: uuid(), title: `${src.name.replace(/\.pdf$/i, "")} p.${pageNo}`, sourceUrl: src.sourceUrl || null, sourceName: src.name,
-        page: pageNo, crop: { ...crop }, width: w, height: hh, gcps: [], method: "affine",
-        opacity: 0.8, gray: false, multiply: true, visible: true, createdAt: nowIso(),
+        id: uuid(), title: isImg ? baseName : `${baseName} p.${pageNo}`, sourceUrl: src.sourceUrl || null, sourceName: src.name,
+        sourceKind: isImg ? "image" : "pdf", page: isImg ? null : pageNo, crop: { ...crop }, width: w, height: hh, gcps: [], method: "affine",
+        opacity: 0.8, gray: false, multiply: !isImg, visible: true, createdAt: nowIso(),
       };
       grGeoref({ rec, blob, isNew: true, src });
     } catch (e) {
@@ -898,12 +1001,14 @@ async function grCrop(src, pageNo) {
   ui.foot.append(
     h("div", { class: "gr-msg" }, "地図の部分を枠で囲んでください（角をドラッグで大きさ、中をドラッグで移動）。凡例や余白を外すと位置合わせしやすくなります。"),
     h("div", { class: "gr-actions" },
-      h("button", { class: "btn secondary", type: "button", onclick: () => { grClose(); openPdfPages(src); } }, "ページ選択へ"),
+      isImg
+        ? h("button", { class: "btn secondary", type: "button", onclick: () => { grClose(); grSourceDone(src); openPdfSource(src.sourceUrl || ""); } }, "選び直す")
+        : h("button", { class: "btn secondary", type: "button", onclick: () => { grClose(); openPdfPages(src); } }, "ページ選択へ"),
       h("button", { class: "btn secondary", type: "button", onclick: () => { Object.assign(crop, { x0: 0, y0: 0, x1: 1, y1: 1 }); draw(); } }, "全体"),
       info, nextBtn));
   layout();
   window.addEventListener("resize", layout);
-  GR.cleanup = () => { window.removeEventListener("resize", layout); page.cleanup(); };
+  GR.cleanup = () => { window.removeEventListener("resize", layout); pg.cleanup(); };
 }
 
 /** 手順4：対応点を置いて位置合わせ */
@@ -1117,9 +1222,9 @@ function grGeoref({ rec, blob, isNew, src }) {
     await loadPdfLayers();
     const it = PDFL.items.get(out.id);
     if (it) { setFollow(false); S.map.fitBounds(it.bounds(), { padding: [20, 20] }); }
-    toast(isNew ? "PDF 地図を追加しました（地図の切替で表示を調整できます）" : "位置合わせを更新しました");
+    toast(isNew ? "地図を追加しました（地図の切替で表示を調整できます）" : "位置合わせを更新しました");
     if (src && src.pdf && isNew && confirm("同じ PDF の別のページも追加しますか？")) openPdfPages(src);
-    else if (src && src.pdf) src.pdf.destroy();
+    else if (src) grSourceDone(src);
   };
 
   ui.foot.append(msg, list, searchForm,
@@ -1154,7 +1259,7 @@ async function pdfLayersForExport(photoMode, files) {
         }
         // 位置合わせ済みのラスタ（どの変換方式でも作る）
         try {
-          toast(`PDF 地図 ${i + 1}/${recs.length} を GeoTIFF に変換中…`, 60000);
+          toast(`重ねた地図 ${i + 1}/${recs.length} を GeoTIFF に変換中…`, 60000);
           const t = await pdfLayerGeoTiff(r, img.blob);
           files.push({ path: `${base}_georef.tif`, blob: t.blob, date: new Date(r.updatedAt || r.createdAt) });
           o.georefFile = `${base}_georef.tif`;

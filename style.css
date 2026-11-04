@@ -458,3 +458,33 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .dem-pal.on { border-color: var(--accent-2); }
 .dem-range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .dem-range input:disabled { opacity: .55; }
+
+/* 画像の貼り付け欄 */
+.paste-box {
+  min-height: 56px; margin-top: 8px; border: 2px dashed var(--line); border-radius: 10px; padding: 10px 12px;
+  color: var(--fg-2); font-size: 13.5px; display: flex; align-items: center; justify-content: center; text-align: center; caret-color: transparent; outline: none;
+}
+.paste-box:empty::before { content: attr(data-ph); }
+.paste-box:focus { border-color: var(--accent-2); }
+
+/* 印刷・画像出力 */
+body.print-mode #fabs-right, body.print-mode #bottombar, body.print-mode #status, body.print-mode .dem-legend, body.print-mode #crosshair, body.print-mode #measure-bar { display: none !important; }
+body.print-mode .leaflet-bottom { bottom: 0; }
+.pr-frame { position: fixed; z-index: 450; border: 2px solid #d0021b; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, .3); pointer-events: none; }
+.pr-n { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); font: 700 11px/1 system-ui, sans-serif; color: #fff; background: #d0021b; padding: 3px 6px; border-radius: 6px; font-style: normal; }
+.pr-bar { position: fixed; z-index: 520; left: 8px; right: 8px; bottom: calc(var(--safe-bottom) + 8px); border-radius: 14px; padding: 10px; box-shadow: var(--shadow); }
+.pr-info { font-size: 13px; line-height: 1.5; margin-bottom: 8px; }
+.pr-actions { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 8px; }
+.pr-actions .btn { padding: 10px 8px; font-size: 14px; }
+.pr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pr-layers label.inline { margin: 6px 0; }
+.pr-layers .pr-sub { margin-left: 28px; font-size: 13.5px; }
+.pr-paper { width: min(100%, 460px); margin: 0 auto 8px; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, .3); }
+.pr-paper img { display: block; width: 100%; height: 100%; object-fit: contain; }
+#print-root { display: none; }
+@media print {
+  body.printing > *:not(#print-root) { display: none !important; }
+  body.printing #print-root { display: block; }
+  body.printing #print-root img { display: block; }
+  body.printing { background: #fff !important; }
+}

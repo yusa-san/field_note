@@ -723,7 +723,8 @@ function openLayers() {
     h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
     h("div", { class: "sect-title" }, "標高（1m 標高タイル）"), demPanelRow(),
-    h("div", { class: "sect-title" }, "PDF から追加した地図"), pdfLayersSection(),
+    h("div", { class: "sect-title" }, "PDF・画像から追加した地図"), pdfLayersSection(),
+    h("button", { type: "button", class: "btn secondary block", style: "margin-top:14px", onclick: openPrint }, "この地図を印刷・PDF・画像に出力"),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),
   );
   openSheet("地図の切替", body, { backdrop: false, height: "62vh" });
@@ -1261,7 +1262,7 @@ function openList() {
       const row = (label, k) => h("div", { class: "menu-grid" },
         h("button", { type: "button", class: "btn secondary", onclick: ex(k, "download") }, `${label} を保存`),
         canShare ? h("button", { type: "button", class: "btn secondary", onclick: ex(k, "share") }, `${label} を共有…`) : h("span"));
-      panel.append(h("div", { class: "note" }, `選んだ ${sel.size} 件だけを書き出します（写真を含む。軌跡と PDF 地図は含みません）`),
+      panel.append(h("div", { class: "note" }, `選んだ ${sel.size} 件だけを書き出します（写真を含む。軌跡と 重ねた地図は含みません）`),
         row("ZIP（写真つき）", "zip"), h("div", { style: "height:6px" }), row("GeoJSON", "geojson"), h("div", { style: "height:6px" }), row("CSV", "csv"));
     }
   };
@@ -1937,7 +1938,7 @@ async function importData(data, getPhotoBlob) {
   }
   const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
   await loadMemos();
-  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / PDF 地図 ${oAdded} 枚` : ""}`);
+  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}`);
 }
 
 /* ====================================================================
@@ -2085,6 +2086,10 @@ async function openMenu() {
       h("dt", {}, "軌跡"), h("dd", {}, `${tracks.length} 本`),
       h("dt", {}, "最終書き出し"), h("dd", {}, last ? fmtDate(last) : "なし"),
       h("dt", {}, "端末内の容量"), h("dd", {}, usage || "—")),
+
+    h("div", { class: "sect-title" }, "地図の印刷・画像出力"),
+    h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
+    h("p", { class: "note" }, "用紙と縮尺を選び、地図の上の枠で範囲を合わせます。方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。"),
 
     h("div", { class: "sect-title" }, "書き出し（端末のファイルへ）"),
     exportRow("ZIP（JSON＋写真）", "zip"),
