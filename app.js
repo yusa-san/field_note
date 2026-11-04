@@ -2055,7 +2055,7 @@ function bulkPointsBox() {
     S.map.fitBounds(b.pad(0.2), { maxZoom: 16 });
   };
   return h("div", {}, ta, h("label", {}, "カテゴリ", cat), h("button", { type: "button", class: "btn secondary block", onclick: go }, "メモとして追加"), status,
-    h("p", { class: "note" }, "調査予定地などのリストを貼り付けて、まとめてメモにできます。区切りはカンマ・タブ・空白。経度, 緯度 の順でも自動で判定します。"));
+    h("p", { class: "note" }, "区切りはカンマ・タブ・空白。経度, 緯度 の順でも自動で判定します。"));
 }
 
 /* ====================================================================
@@ -2073,9 +2073,6 @@ async function openMenu() {
   const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(["x"], "x.txt", { type: "text/plain" })] }));
 
   const inclPhotos = h("input", { type: "checkbox" });
-  const exportRow = (label, kind) => h("div", { class: "menu-grid" },
-    h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "download", inclPhotos.checked) }, `${label} を保存`),
-    canShare ? h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "share", inclPhotos.checked) }, `${label} を共有…`) : h("span"));
 
   // GPX は端末によって種類（MIME）が認識されず選べないことがあるので、拡張子での絞り込みはしない
   const fileIn = h("input", { type: "file", multiple: true, hidden: true });
@@ -2113,7 +2110,7 @@ async function openMenu() {
   const trackList = h("div");
   const renderTracks = () => {
     trackList.replaceChildren();
-    if (!tracks.length) trackList.append(h("div", { class: "note" }, "記録した軌跡はありません。右の 〰 ボタンで記録を開始できます。"));
+    if (!tracks.length) trackList.append(h("div", { class: "note" }, "記録した軌跡はありません。地図の右の軌跡ボタンで記録を開始できます。"));
     for (const t of tracks) {
       const shown = S.shownTracks.has(t.id) || (S.track && S.track.id === t.id);
       const showBtn = h("button", { class: "chip" + (shown ? " on" : ""), type: "button" }, shown ? "表示中" : "表示");
@@ -2147,87 +2144,90 @@ async function openMenu() {
   renderTracks();
 
   const last = Settings.data.lastExportAt;
-  // 内容が多いので、タブで分ける（最後に開いたタブを覚える）
   const TABS = [["save", "保存・印刷"], ["load", "読み込み"], ["track", "軌跡"], ["settings", "設定"]];
+  // 見出し付きのまとまり（カード）・長い説明は畳む
+  const sec = (title, sub, ...kids) => h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, title), sub ? h("p", {}, sub) : null), ...kids);
+  const sub = (t) => h("div", { class: "msec-sub" }, t);
+  const hint = (t) => h("details", { class: "hint" }, h("summary", {}, "くわしく"), h("p", {}, t));
+  const xrow = (label, desc, kind) => h("div", { class: "xrow" },
+    h("div", { class: "xlab" }, h("b", {}, label), h("small", {}, desc)),
+    h("div", { class: "xbtn" },
+      h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "download", inclPhotos.checked) }, "保存"),
+      canShare ? h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "share", inclPhotos.checked) }, "共有") : null));
+  const stat = (n, unit, label) => h("div", { class: "stat" }, h("b", {}, String(n)), h("small", {}, `${unit}・${label}`));
+  const dirty = !$("#unsaved-badge").hidden;
   const panes = {
     save: h("div", {},
-      h("dl", { class: "kv" },
-        h("dt", {}, "メモ"), h("dd", {}, `${S.memos.size} 件`),
-        h("dt", {}, "写真"), h("dd", {}, `${photoCount} 枚`),
-        h("dt", {}, "軌跡"), h("dd", {}, `${tracks.length} 本`),
-        h("dt", {}, "最終書き出し"), h("dd", {}, last ? fmtDate(last) : "なし"),
-        h("dt", {}, "端末内の容量"), h("dd", {}, usage || "—")),
-      h("div", { class: "sect-title" }, "書き出し（端末のファイルへ）"),
-      exportRow("ZIP（JSON＋写真）", "zip"),
-      h("p", { class: "note" }, "ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。写真は端末内に保存したものをそのまま入れます。"),
-      h("div", { style: "height:6px" }),
-      exportRow("JSON（全データ）", "json"),
-      h("label", { class: "inline", style: "margin:6px 0 4px;font-size:14px" }, inclPhotos, "JSON に写真を埋め込む（base64・ファイルが大きくなります）"),
-      h("div", { style: "height:6px" }),
-      exportRow("GeoJSON", "geojson"),
-      h("div", { style: "height:6px" }),
-      exportRow("CSV", "csv"),
-      h("div", { style: "height:6px" }),
-      exportRow("GPX", "gpx"),
-      h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
-      h("div", { class: "sect-title" }, "印刷・PDF・画像"),
-      h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
-      h("p", { class: "note" }, "用紙と縮尺を選び、地図の上の枠で範囲を合わせます。方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。範囲は Vector Studio の範囲ファイルで保存・読み込みできます。"),
-      h("div", { class: "sect-title" }, "オフライン"),
-      h("button", { class: "btn secondary block", type: "button", onclick: () => prefetchTiles(prefStatus) }, "表示範囲の地図を端末に保存"),
-      prefStatus,
-      h("button", { class: "btn secondary block", type: "button", onclick: async () => {
-        if (!confirm("保存した地図タイル（自動キャッシュ含む）を削除しますか？メモは消えません。")) return;
-        await caches.delete("fn-tiles-saved");
-        await caches.delete("fn-tiles-rt");
-        toast("地図キャッシュを削除しました");
-      } }, "保存した地図を削除"),
-      h("p", { class: "note" }, "一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を保存しておくと安心です。")),
+      sec("データの概要", null,
+        h("div", { class: "stats" }, stat(S.memos.size, "件", "メモ"), stat(photoCount, "枚", "写真"), stat(tracks.length, "本", "軌跡")),
+        h("div", { class: "msec-meta" + (dirty ? " warn-text" : "") }, `最終書き出し：${last ? fmtDate(last) : "なし"}${dirty ? "（その後に追加・変更あり）" : ""}　端末内の容量：${usage || "—"}`)),
+      sec("バックアップ", "このアプリで読み戻せる、すべてのデータの保存",
+        xrow("ZIP（JSON＋写真）", "おすすめ。写真・録音もファイルのまま入る", "zip"),
+        xrow("JSON（全データ）", "1 つのテキストファイル", "json"),
+        h("label", { class: "inline", style: "margin:8px 0 0;font-size:13.5px" }, inclPhotos, "JSON に写真を埋め込む（ファイルが大きくなります）"),
+        hint("ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。JSON は写真を埋め込んだ場合だけ写真も復元できます。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。iPhone では「共有」→「ファイルに保存」が確実です。")),
+      sec("ほかのアプリ向け", "メモと軌跡を、よく使う形式で書き出す",
+        xrow("GeoJSON", "QGIS などの GIS", "geojson"),
+        xrow("CSV", "Excel などの表計算", "csv"),
+        xrow("GPX", "登山・GPS アプリ", "gpx")),
+      sec("印刷・PDF・画像", "用紙と縮尺を選び、地図の上の枠で範囲を合わせる",
+        h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
+        hint("方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。範囲は Vector Studio の範囲ファイルで保存・読み込みできます。")),
+      sec("オフライン", "電波のない場所に行く前に、地図を端末に保存",
+        h("div", { class: "menu-grid" },
+          h("button", { class: "btn secondary", type: "button", onclick: () => prefetchTiles(prefStatus) }, "表示範囲を保存"),
+          h("button", { class: "btn secondary", type: "button", onclick: async () => {
+            if (!confirm("保存した地図タイル（自動キャッシュ含む）を削除しますか？メモは消えません。")) return;
+            await caches.delete("fn-tiles-saved");
+            await caches.delete("fn-tiles-rt");
+            toast("地図キャッシュを削除しました");
+          } }, "保存した地図を削除")),
+        prefStatus,
+        hint("一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を表示して「表示範囲を保存」しておくと安心です（今のズームから 2 段階拡大した分まで）。"))),
     load: h("div", {},
-      h("div", { class: "sect-title" }, "メモ・軌跡として読み込む"),
-      h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
-      h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
-      h("div", { class: "sect-title" }, "地点をまとめて入力"),
-      bulkPointsBox(),
-      h("div", { class: "sect-title" }, "ファイルを地図に重ねる"),
-      h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報を重ねる"),
-      h("div", { class: "sect-title" }, "API・オープンデータから重ねる"),
-      h("div", { class: "menu-grid" },
-        h("button", { class: "btn secondary", type: "button", onclick: openReinfoSheet }, "不動産情報ライブラリ"),
-        h("button", { class: "btn secondary", type: "button", onclick: openEstatSheet }, "e-Stat 統計")),
-      h("button", { class: "btn secondary block", type: "button", style: "margin-top:8px", onclick: openGreenSheet }, "東京都 緑のオープンデータ"),
-      h("p", { class: "note" }, "メモにはせず、地図の上に表示だけします。重ねたデータの表示・透明度・削除は「地図の切替」→「データを重ねる」でまとめて管理できます。"),
-      h("button", { class: "btn secondary block", type: "button", onclick: openDataSheet }, "重ねたデータを管理する")),
+      sec("メモ・軌跡を読み込む", "ZIP・JSON・GeoJSON・GPX",
+        h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ファイルを選ぶ"), fileIn,
+        hint("同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。")),
+      sec("地点をまとめて入力", "「緯度, 経度, 名称」を 1 行ずつ貼り付けてメモにする", bulkPointsBox()),
+      sec("地図に重ねる", "メモにはせず、地図の上に表示だけする",
+        sub("ファイルから"),
+        h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報"),
+        sub("API・オープンデータから"),
+        h("div", { class: "menu-grid" },
+          h("button", { class: "btn secondary", type: "button", onclick: openReinfoSheet }, "不動産情報ライブラリ"),
+          h("button", { class: "btn secondary", type: "button", onclick: openEstatSheet }, "e-Stat 統計")),
+        h("button", { class: "btn secondary block", type: "button", style: "margin-top:8px", onclick: openGreenSheet }, "東京都 緑のオープンデータ"),
+        h("button", { class: "btn link block", type: "button", style: "margin-top:6px", onclick: openDataSheet }, "重ねたデータを管理する（表示・透明度・削除）"))),
     track: h("div", {},
-      h("div", { class: "sect-title" }, "記録した軌跡"),
-      trackList,
-      h("p", { class: "note" }, "記録は右の軌跡ボタンで開始・終了します。画面を消すと記録が止まる端末では、GPS ロガーアプリで記録して GPX を「読み込み」タブから取り込んでください。")),
+      sec("記録した軌跡", "表示の切り替え・削除", trackList,
+        hint("記録は地図の右の軌跡ボタンで開始・終了します。画面を消すと記録が止まる端末では、GPS ロガーアプリで記録して GPX を「読み込み」タブから取り込んでください。"))),
     settings: h("div", {},
-      h("div", { class: "sect-title" }, "調査"),
-      h("label", {}, "調査名（ファイル名とメモに記録）", proj),
-      h("label", {}, "記録者", obs),
-      h("div", { class: "lbl-plain" }, "カテゴリ"), cats,
-      h("div", { class: "sect-title" }, "写真・聞き取り"),
-      h("label", {}, "写真の保存サイズ（端末内）", psize),
-      h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
-      h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
-      h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "録音＋書き起こしで、その場で文字にできなかったときは録音後に自動で書き起こす"),
-      h("details", { class: "adv" }, h("summary", {}, "詳細設定"),
+      sec("調査", "書き出すファイル名とメモに記録されます",
+        h("label", {}, "調査名", proj),
+        h("label", {}, "記録者", obs)),
+      sec("カテゴリ", "名前・色・並び順を変えられます（すぐ反映）", cats),
+      sec("写真・聞き取り", null,
+        h("label", {}, "写真の保存サイズ（端末内）", psize),
+        h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
+        h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
+        h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "その場で文字にできなかった録音は、録音後に自動で書き起こす")),
+      sec("詳細設定", null,
         h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn)),
-      h("button", { class: "btn primary block", type: "button", style: "margin-top:12px", onclick: saveSettings }, "設定を保存"),
-      h("div", { class: "sect-title" }, "データの消去"),
-      h("button", { class: "btn danger block", type: "button", onclick: async () => {
-        if (!confirm("全てのメモ・写真・軌跡を端末から削除します。書き出し済みか確認してください。")) return;
-        if (!confirm("本当に削除しますか？元に戻せません。")) return;
-        await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks"); await DB.clear("audios");
-        for (const l of S.shownTracks.values()) S.map.removeLayer(l);
-        S.shownTracks.clear();
-        await loadMemos();
-        closeSheet(true);
-        toast("全データを削除しました");
-      } }, "全データを削除"),
-      h("p", { class: "note", style: "margin-top:16px" },
-        "使い方：画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は国土地理院の標高タイル（1m があればその値、なければ 5m・10m）または標高 API による値で、GPS高度とは別に記録されます。")),
+      h("div", { class: "msave" }, h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存")),
+      sec("使い方", null,
+        h("p", { class: "note", style: "margin:0" },
+          "画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は国土地理院の標高タイル（1m があればその値、なければ 5m・10m）または標高 API による値で、GPS高度とは別に記録されます。")),
+      h("section", { class: "msec danger-zone" }, h("div", { class: "msec-h" }, h("h3", {}, "データの消去"), h("p", {}, "メモ・写真・録音・軌跡を端末から消します（元に戻せません）")),
+        h("button", { class: "btn danger block", type: "button", onclick: async () => {
+          if (!confirm("全てのメモ・写真・軌跡を端末から削除します。書き出し済みか確認してください。")) return;
+          if (!confirm("本当に削除しますか？元に戻せません。")) return;
+          await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks"); await DB.clear("audios");
+          for (const l of S.shownTracks.values()) S.map.removeLayer(l);
+          S.shownTracks.clear();
+          await loadMemos();
+          closeSheet(true);
+          toast("全データを削除しました");
+        } }, "全データを削除"))),
   };
   let cur = "save";
   try { const t = localStorage.getItem("fn.menuTab"); if (panes[t]) cur = t; } catch {}

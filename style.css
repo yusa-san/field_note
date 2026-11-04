@@ -544,3 +544,34 @@ body.print-mode .data-legend { display: none !important; }
 .menu-pane .sect-title:first-child { margin-top: 2px; }
 details.adv { margin-top: 12px; }
 details.adv summary { cursor: pointer; font-size: 13.5px; color: var(--fg-2); }
+
+/* 保存・設定：タブ内のまとまり */
+.msec { border: 1px solid var(--line); border-radius: 14px; padding: 12px 12px 14px; margin: 0 0 12px; background: var(--bg); }
+.msec-h h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.msec-h p { margin: 2px 0 10px; font-size: 12.5px; color: var(--fg-2); line-height: 1.5; }
+.msec-sub { font-size: 12.5px; font-weight: 700; color: var(--fg-2); margin: 10px 0 6px; }
+.msec-sub:first-of-type { margin-top: 2px; }
+.msec-meta { font-size: 12.5px; color: var(--fg-2); margin-top: 10px; line-height: 1.6; }
+.msec-meta.warn-text { color: #b35c00; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { background: var(--bg-2); border-radius: 10px; padding: 8px 10px; text-align: center; }
+.stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.stat small { font-size: 11.5px; color: var(--fg-2); }
+.xrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.xrow:first-of-type { border-top: 0; padding-top: 0; }
+.xlab { flex: 1; min-width: 0; }
+.xlab b { display: block; font-size: 14px; }
+.xlab small { display: block; font-size: 12px; color: var(--fg-2); }
+.xbtn { display: flex; gap: 6px; flex: none; }
+.xbtn .btn { padding: 8px 12px; font-size: 13.5px; }
+details.hint { margin-top: 8px; }
+details.hint summary { cursor: pointer; font-size: 12.5px; color: var(--accent-2); list-style: none; }
+details.hint summary::-webkit-details-marker { display: none; }
+details.hint summary::before { content: "▸ "; }
+details.hint[open] summary::before { content: "▾ "; }
+details.hint p { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-2); line-height: 1.6; }
+.msave { position: sticky; bottom: -16px; z-index: 2; margin: 0 -14px 12px; padding: 8px 14px 10px; background: linear-gradient(rgba(0,0,0,0), var(--bg) 30%); }
+.msec.danger-zone { border-color: rgba(200, 40, 40, .35); }
+.msec.danger-zone h3 { color: #c62828; }
+.btn.link { background: none; border: 0; color: var(--accent-2); text-decoration: underline; padding: 6px; }
+@media (prefers-color-scheme: dark) { .msec-meta.warn-text { color: #ffb74d; } .msec.danger-zone h3 { color: #ef9a9a; } }
