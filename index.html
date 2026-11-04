@@ -144,5 +144,18 @@
 <script src="georef.js"></script>
 <script src="memo-tools.js"></script>
 <script src="app.js"></script>
+
+<script>
+(() => {
+  const token = "fcd0197723004b2a9dea4a89dfd81727";
+  if (location.hostname !== "yusa-san.github.io" || !navigator.onLine) return;
+  const s = document.createElement("script");
+  s.defer = true;
+  s.src = "https://static.cloudflareinsights.com/beacon.min.js";
+  s.dataset.cfBeacon = JSON.stringify({ token });
+  document.head.append(s);
+})();
+</script>
+
 </body>
 </html>
