@@ -43,7 +43,7 @@ function prCandidates() {
   const list = [];
   const bdef = BASE_LAYERS.find((b) => b.id === S.baseId);
   if (bdef) {
-    const style = bdef.vector ? `（${(VT_PRESETS[vtSettings().style] || VT_PRESETS.std).name}）` : "";
+    const style = bdef.vector ? `（${vtStyleName(vtSettings().style)}）` : "";
     list.push({ key: "base", name: `背景：${bdef.name}${style}`, kind: bdef.vector ? "vector" : "tile", def: bdef, opacity: 1, z: 1 });
   }
   if (demCfg().on) list.push({ key: "dem", name: "1m標高（段彩）", kind: "dem", opacity: demCfg().opacity, z: 9 });

@@ -155,9 +155,61 @@ async function vtLoadBaseStyle() {
   }
   return vtBaseStyle;
 }
+/* ---------- 読み込んだスタイル JSON（Vector Studio・Maputnik などで作った MapLibre / Mapbox GL スタイル） ---------- */
+const VT_GLYPHS = "https://gsi-cyberjapan.github.io/optimal_bvmap/glyphs/{fontstack}/{range}.pbf";
+const vtCustomList = () => (Array.isArray(Settings.data.vtCustom) ? Settings.data.vtCustom : []);
+const vtCustom = (key) => (key && key.startsWith("custom:") ? vtCustomList().find((c) => c.id === key.slice(7)) : null);
+const vtStyleName = (key) => vtCustom(key)?.name || (VT_PRESETS[key] || VT_PRESETS.std).name;
+const isGsiVtUrl = (u) => typeof u === "string" && /optimal_bvmap/.test(u);
+
+/** 読み込んだスタイルを、この地図で使える形に整える（地理院のベクトルタイルを XYZ に、文字の字形を地理院のものに） */
+function vtNormalizeStyle(j) {
+  if (!j || typeof j !== "object" || j.version !== 8 || !Array.isArray(j.layers) || !j.sources) throw new Error("MapLibre / Mapbox GL のスタイル（version 8）ではありません");
+  const s = JSON.parse(JSON.stringify(j));
+  let gsiSource = null;
+  for (const [id, src] of Object.entries(s.sources)) {
+    if (src.type !== "vector") continue;
+    if (isGsiVtUrl(src.url) || (src.tiles || []).some(isGsiVtUrl)) {
+      // PMTiles 版・XYZ 版のどちらでも、同じデータの XYZ タイルにそろえる（オフライン保存・印刷と共通）
+      s.sources[id] = { type: "vector", tiles: [VT_TILES], minzoom: src.minzoom ?? 4, maxzoom: Math.min(16, src.maxzoom ?? 16), attribution: src.attribution || "国土地理院 最適化ベクトルタイル" };
+      gsiSource ||= id;
+    }
+  }
+  const usedSources = new Set(s.layers.map((l) => l.source).filter(Boolean));
+  for (const id of usedSources) if (!s.sources[id]) throw new Error(`レイヤが参照しているデータ「${id}」がスタイルにありません`);
+  if (!s.glyphs) s.glyphs = VT_GLYPHS;
+  if (s.sprite && !/^https?:\/\//.test(typeof s.sprite === "string" ? s.sprite : "")) delete s.sprite; // 相対パスのアイコンは読めない
+  delete s.center; delete s.zoom; delete s.bearing; delete s.pitch; // 地図の位置はこのアプリのものを使う
+  return { style: s, gsiSource, hasSymbols: s.layers.some((l) => l.type === "symbol") };
+}
+/** スタイル JSON を登録して、そのスタイルに切り替える */
+function vtAddCustom(json, fallbackName) {
+  const { style, gsiSource, hasSymbols } = vtNormalizeStyle(json);
+  if (!gsiSource) throw new Error("地理院のベクトルタイル（optimal_bvmap）を使うスタイルではありません");
+  const id = Math.random().toString(36).slice(2, 10);
+  const name = String(json.name || fallbackName || "読み込んだスタイル").replace(/\s*\/\s*QGIS用スタイル$/, "").slice(0, 60);
+  const item = { id, name, style, addLabels: !hasSymbols, addedAt: new Date().toISOString(), tool: json.metadata?.["vector-studio:version"] ? "Vector Studio" : "" };
+  Settings.data.vtCustom = [...vtCustomList(), item];
+  Settings.data.vtStyle = "custom:" + id;
+  Settings.save();
+  return item;
+}
+
 function vtBuildStyle(presetKey, hidden = []) {
-  const preset = VT_PRESETS[presetKey] || VT_PRESETS.std;
-  const s = JSON.parse(JSON.stringify(vtBaseStyle));
+  const custom = vtCustom(presetKey);
+  const preset = custom ? {} : VT_PRESETS[presetKey] || VT_PRESETS.std;
+  let s;
+  if (custom) {
+    s = JSON.parse(JSON.stringify(custom.style));
+    // 文字のないスタイル（QGIS 用に書き出したものなど）には、地理院の標準の注記・記号を上に重ねる
+    if (custom.addLabels && vtBaseStyle) {
+      const src = Object.keys(s.sources).find((k) => s.sources[k].tiles?.[0] === VT_TILES) || "v";
+      if (!s.sources[src]) s.sources[src] = vtBaseStyle.sources.v;
+      for (const l of vtBaseStyle.layers.filter((x) => x.type === "symbol")) s.layers.push({ ...JSON.parse(JSON.stringify(l)), id: "std-label:" + l.id, source: src });
+      if (!s.sprite && vtBaseStyle.sprite) s.sprite = vtBaseStyle.sprite;
+      s.glyphs = s.glyphs || vtBaseStyle.glyphs;
+    }
+  } else s = JSON.parse(JSON.stringify(vtBaseStyle));
   const hide = new Set(hidden);
   const hiddenLayers = new Set(VT_GROUPS.filter((g) => hide.has(g.key) && !g.mode).flatMap((g) => g.layers));
   const textOff = hide.has("label_text"), iconOff = hide.has("label_icon");
@@ -227,9 +279,30 @@ function vtApply() {
   m.setStyle(vtBuildStyle(style, hidden), { diff: true });
 }
 
+/** 読み込んだスタイルから、色見本に使う色を拾う */
+function vtCustomColors(style) {
+  const pick = (layers, types) => {
+    for (const l of style.layers) {
+      if (!types.includes(l.type) || (l.layout && l.layout.visibility === "none")) continue;
+      if (layers && !layers.includes(l["source-layer"])) continue;
+      const p = l.paint || {}, v = p[`${l.type}-color`];
+      if (typeof v === "string") return v;
+    }
+    return null;
+  };
+  return {
+    bg: pick(null, ["background"]) || "#FFFFFF",
+    water: pick(["WA"], ["fill"]) || pick(["RvrCL", "WL", "WA"], ["line"]) || "#BED2FF",
+    building: pick(["BldA"], ["fill"]) || pick(["StrctArea", "AdmBdry"], ["fill"]) || "#E8DEC8",
+    roadMajor: pick(["RdCL"], ["line"]) || "#F47B5C",
+    rail: pick(["RailCL"], ["line"]) || "#666666",
+    text: pick(["Anno"], ["symbol"]) || pick(["Cntr"], ["line"]) || "#333333",
+  };
+}
 /** プリセットの色見本（カード用） */
 function vtSwatch(key) {
-  const p = VT_PRESETS[key];
+  const custom = vtCustom(key);
+  const p = custom ? { c: vtCustomColors(custom.style) } : VT_PRESETS[key] || VT_PRESETS.std;
   const c = p.c || (p.pale
     ? { bg: "#FFFFFF", water: "#DDE7FA", road: "#F4F4F4", roadMajor: "#F2C9A5", building: "#EEEEEE", text: "#555555", rail: "#9A9A9A" }
     : { bg: "#FFFFFF", water: "#BED2FF", road: "#FFFFFF", roadMajor: "#F47B5C", building: "#E8DEC8", text: "#333333", rail: "#666666" });
@@ -248,17 +321,79 @@ function vtBackButton() {
 }
 function openVectorStyleSheet() {
   const grid = h("div", { class: "vt-grid" });
+  const customBox = h("div");
+  const select = (key) => { Settings.data.vtStyle = key; Settings.save(); vtApply(); render(); };
   const render = () => {
     grid.replaceChildren();
     const cur = vtSettings().style;
     for (const [key, p] of Object.entries(VT_PRESETS)) {
       const card = h("button", { type: "button", class: "vt-card" + (key === cur ? " on" : "") }, vtSwatch(key), h("span", { class: "vt-name" }, p.name), h("span", { class: "vt-sub" }, p.sub));
-      card.onclick = () => { Settings.data.vtStyle = key; Settings.save(); vtApply(); render(); };
+      card.onclick = () => select(key);
       grid.append(card);
     }
+    // 読み込んだスタイル
+    customBox.replaceChildren();
+    const list = vtCustomList();
+    if (list.length) {
+      const cg = h("div", { class: "vt-grid" });
+      for (const c of list) {
+        const key = "custom:" + c.id;
+        const labels = h("input", { type: "checkbox", checked: !!c.addLabels });
+        labels.onchange = () => { c.addLabels = labels.checked; Settings.save(); if (vtSettings().style === key) vtApply(); };
+        const del = h("button", { type: "button", class: "chip" }, "削除");
+        del.onclick = (e) => {
+          e.stopPropagation();
+          if (!confirm(`「${c.name}」を削除しますか？`)) return;
+          Settings.data.vtCustom = vtCustomList().filter((x) => x.id !== c.id);
+          if (vtSettings().style === key) Settings.data.vtStyle = "std";
+          Settings.save();
+          vtApply();
+          render();
+        };
+        const card = h("div", { class: "vt-card vt-custom" + (key === cur ? " on" : ""), role: "button", tabindex: "0" }, vtSwatch(key),
+          h("span", { class: "vt-name" }, c.name),
+          h("span", { class: "vt-sub" }, [c.tool, `${c.style.layers.length} レイヤ`].filter(Boolean).join("・")),
+          h("label", { class: "inline vt-lab" }, labels, "地理院の注記を重ねる"), del);
+        card.onclick = (e) => { if (e.target.closest("label, button")) return; select(key); };
+        cg.append(card);
+      }
+      customBox.append(h("div", { class: "sect-title" }, "読み込んだスタイル"), cg);
+    }
+  };
+  // スタイル JSON の読み込み（ファイル・URL）
+  const status = h("div", { class: "note" });
+  const loadJson = async (getText, name) => {
+    status.textContent = "読み込み中…";
+    try {
+      const json = JSON.parse(await getText());
+      await vtLoadBaseStyle();
+      const item = vtAddCustom(json, name);
+      status.textContent = `「${item.name}」を読み込みました${item.addLabels ? "（文字のないスタイルなので、地理院の注記を重ねています）" : ""}`;
+      if (S.baseId !== "gsivt") await setBase("gsivt"); else vtApply();
+      render();
+    } catch (e) {
+      status.textContent = "読み込めませんでした：" + (e instanceof SyntaxError ? "JSON の形式が正しくありません" : e.message);
+    }
+  };
+  const fileIn = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+  fileIn.onchange = () => {
+    const f = fileIn.files[0];
+    fileIn.value = "";
+    if (f) loadJson(() => f.text(), f.name.replace(/\.json$/i, ""));
+  };
+  const urlIn = h("input", { type: "text", placeholder: "https://…/style.json", inputmode: "url" });
+  const fromUrl = () => {
+    const u = urlIn.value.trim();
+    if (!/^https?:\/\//.test(u)) return (status.textContent = "http(s):// で始まる URL を入れてください");
+    loadJson(async () => { const r = await fetch(u); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); }, u.split("/").pop().replace(/\.json.*$/i, ""));
   };
   render();
-  openSheet("地理院 Vector のスタイル", h("div", {}, vtBackButton(), grid,
+  openSheet("地理院 Vector のスタイル", h("div", {}, vtBackButton(), grid, customBox,
+    h("div", { class: "sect-title" }, "スタイル JSON を読み込む"),
+    h("button", { type: "button", class: "btn secondary block", onclick: () => fileIn.click() }, "JSON ファイルを選ぶ"), fileIn,
+    h("div", { class: "gr-search", style: "margin-top:8px" }, urlIn, h("button", { type: "button", class: "chip", onclick: fromUrl }, "URL から")),
+    status,
+    h("p", { class: "note" }, "Vector Studio・Maputnik などで作った、地理院のベクトルタイル（optimal_bvmap）を使う MapLibre / Mapbox GL のスタイル（version 8）を読み込めます。PMTiles 版を参照するスタイルも、同じデータの XYZ タイルに置き換えて表示します。文字のレイヤがないスタイル（QGIS 用の書き出しなど）には、地理院の標準の注記・記号を上に重ねられます。「表示する項目」の切り替えも使えます。"),
     h("p", { class: "note" }, "「標準」は地理院地図の配色。Ivory・Emberline などは、ZzzLc0405/photo-abstract-editorial の「アイボリーの余白・彩度を落とした少数の色・細い線」という考え方を参考に、地図用に作った配色です。")),
   { backdrop: false, height: "60vh" });
 }

@@ -690,7 +690,7 @@ function openLayers() {
   // 地理院 Vector：カードの横に「表示する項目」「スタイル」（子画面）を置く
   const vtDef = BASE_LAYERS.find((b) => b.vector);
   const vtCard = h("button", { class: "layer-card" + (S.baseId === vtDef.id ? " on" : ""), type: "button" },
-    vtSwatch(Settings.data.vtStyle || "std"), h("span", {}, vtDef.name, h("small", {}, (VT_PRESETS[Settings.data.vtStyle] || VT_PRESETS.std).name)));
+    vtSwatch(Settings.data.vtStyle || "std"), h("span", {}, vtDef.name, h("small", {}, vtStyleName(Settings.data.vtStyle))));
   vtCard.onclick = () => select(vtDef, vtCard);
   cards.push(vtCard);
   const openVt = (fn) => () => { if (S.baseId !== vtDef.id) select(vtDef, vtCard); fn(); };

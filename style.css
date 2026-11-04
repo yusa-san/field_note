@@ -522,3 +522,8 @@ body.print-mode .data-legend { display: none !important; }
 .dp-table { border-collapse: collapse; font-size: 12px; margin-top: 4px; }
 .dp-table th { text-align: left; font-weight: 500; color: var(--fg-2); padding: 1px 8px 1px 0; vertical-align: top; white-space: nowrap; }
 .dp-table td { padding: 1px 0; word-break: break-all; }
+
+/* 読み込んだスタイル（地理院 Vector） */
+.vt-card.vt-custom { cursor: pointer; }
+.vt-card.vt-custom .vt-lab { font-size: 12px; margin: 4px 0 2px; padding: 0 8px; gap: 6px; }
+.vt-card.vt-custom .chip { display: inline-block; margin: 2px 8px 8px; padding: 3px 10px; font-size: 12px; }
