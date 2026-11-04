@@ -51,6 +51,7 @@ function prCandidates() {
     const def = OVERLAYS.find((d) => d.id === id);
     if (def) list.push({ key: "ov:" + id, name: def.name, kind: "tile", def, opacity: o.opacity, z: 10 + OVERLAYS.indexOf(def) });
   }
+  list.push(...extraPrintCandidates());
   list.sort((a, b) => a.z - b.z);
   // データ（緑・不動産情報ライブラリ・e-Stat）は PDF 地図の下
   list.push(...dataPrintCandidates());
@@ -333,7 +334,7 @@ async function prDrawTiles(lctx, ext, r, k, def, progress) {
   for (let ty = t.ty0; ty <= t.ty1; ty++) for (let tx = t.tx0; tx <= t.tx1; tx++) jobs.push([tx, ty]);
   let done = 0;
   await prPool(jobs, 8, async ([tx, ty]) => {
-    const img = await prLoadImage(def.url.replace("{z}", z).replace("{x}", tx).replace("{y}", ty));
+    const img = await prLoadImage(def.url.replace("{z}", z).replace("{x}", tx).replace("{y}", def.tms ? 2 ** z - 1 - ty : ty));
     if (img) lctx.drawImage(img, ...prTileRect(ext, r, z, tx, ty));
     progress(++done, jobs.length);
   });
@@ -699,7 +700,7 @@ async function prRender(cfg, ext, onProgress = () => {}) {
   let demInfo = null;
   // データのレイヤは 1 回でまとめて描く
   const dataKeys = cands.filter((c) => c.kind === "data").map((c) => c.key);
-  const tileSteps = cands.filter((c, i) => ["tile", "vector", "dem", "pdf"].includes(c.kind) || (c.kind === "data" && cands.findIndex((x) => x.kind === "data") === i));
+  const tileSteps = cands.filter((c, i) => ["tile", "vector", "dem", "pdf", "canvas"].includes(c.kind) || (c.kind === "data" && cands.findIndex((x) => x.kind === "data") === i));
   let stepNo = 0;
   for (const c of tileSteps) {
     stepNo++;
@@ -711,8 +712,15 @@ async function prRender(cfg, ext, onProgress = () => {}) {
     try {
       if (c.kind === "tile") {
         await prDrawTiles(lctx, ext, r, k, c.def, progress);
-        credits.add(/ハザード/.test(c.def.attr) ? "ハザードマップポータルサイト" : /openstreetmap/i.test(c.def.attr) ? "© OpenStreetMap contributors" : "国土地理院（地理院タイル）");
+        const at = String(c.def.attr || "");
+        credits.add(/ハザード/.test(at) ? "ハザードマップポータルサイト" : /openstreetmap/i.test(at) ? "© OpenStreetMap contributors"
+          : /今昔/.test(at) ? "今昔マップ on the web（谷謙二）" : /迅速測図/.test(at) ? "迅速測図：農研機構農業環境研究部門" : /気象庁/.test(at) ? "気象庁ホームページ"
+          : /活断層/.test(at) ? "国土地理院（都市圏活断層図）" : "国土地理院（地理院タイル）");
         if (c.key !== "base") legend.push({ type: "text", text: `重ねた地図：${c.def.name}` });
+      } else if (c.kind === "canvas") {
+        const items = (await c.draw(lctx, ext, r, k, progress)) || [];
+        if (c.credit) credits.add(c.credit);
+        if (items.length) { legend.push({ type: "head", text: c.name }); legend.push(...items.slice(0, 12)); }
       } else if (c.kind === "vector") {
         await prDrawVector(lctx, ext, r, k, mw, mh);
         credits.add("国土地理院（地理院地図Vector）");
@@ -740,7 +748,7 @@ async function prRender(cfg, ext, onProgress = () => {}) {
       console.warn("印刷：描けないレイヤ", c.name, e);
       toast(`「${c.name}」を描けませんでした：${e.message}`, 4000);
     }
-    mctx.globalAlpha = c.kind === "tile" ? c.opacity : c.kind === "dem" ? c.opacity : 1; // データは色の透明度をスタイルに含む
+    mctx.globalAlpha = c.kind === "tile" || c.kind === "dem" || c.kind === "canvas" ? c.opacity : 1; // データは色の透明度をスタイルに含む
     mctx.drawImage(layerC, 0, 0);
     mctx.globalAlpha = 1;
   }

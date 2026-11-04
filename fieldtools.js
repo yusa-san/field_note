@@ -269,12 +269,13 @@ function compareCandidates() {
   return list;
 }
 async function makeCompareLayer(c, pane) {
+  if (c.def.make) return c.def.make(pane);
   if (c.def.vector) {
     await vtLoadLibs(); await vtLoadBaseStyle(); await vtPrepareSource();
     const { style, hidden } = vtSettings();
     return L.maplibreGL({ style: vtBuildStyle(style, hidden), interactive: false, attributionControl: false, pane });
   }
-  return L.tileLayer(c.def.url, { pane, maxNativeZoom: c.def.max, maxZoom: 20, minZoom: c.def.min || 0, crossOrigin: true, attribution: c.def.attr, errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" });
+  return L.tileLayer(c.def.url, { pane, tms: !!c.def.tms, minNativeZoom: c.def.min, maxNativeZoom: c.def.max, maxZoom: 20, minZoom: c.def.min || 0, crossOrigin: true, attribution: c.def.attr, errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" });
 }
 function compareClip() {
   if (!CMP.on) return;
