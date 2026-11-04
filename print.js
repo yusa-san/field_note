@@ -52,6 +52,8 @@ function prCandidates() {
     if (def) list.push({ key: "ov:" + id, name: def.name, kind: "tile", def, opacity: o.opacity, z: 10 + OVERLAYS.indexOf(def) });
   }
   list.sort((a, b) => a.z - b.z);
+  // データ（緑・不動産情報ライブラリ・e-Stat）は PDF 地図の下
+  list.push(...dataPrintCandidates());
   for (const it of [...PDFL.items.values()].filter((x) => x.rec.visible !== false).sort((a, b) => (a.rec.order || 0) - (b.rec.order || 0))) {
     list.push({ key: "pdf:" + it.rec.id, name: it.rec.title || "重ねた地図", kind: "pdf", it });
   }
@@ -261,16 +263,19 @@ async function prDrawTiles(lctx, ext, r, k, def, progress) {
   });
 }
 
-async function prDrawVector(lctx, ext, r, k, mw, mh) {
+async function prDrawVector(lctx, ext, r, k, mw, mh, styleObj) {
   await vtLoadLibs();
-  await vtLoadBaseStyle();
-  const { style, hidden } = vtSettings();
+  if (!styleObj) {
+    await vtLoadBaseStyle();
+    const { style, hidden } = vtSettings();
+    styleObj = vtBuildStyle(style, hidden);
+  }
   const cssW = Math.max(1, Math.round(mw / k)), cssH = Math.max(1, Math.round(mh / k));
   const div = h("div", { style: `position:fixed;left:-${cssW + 1000}px;top:0;width:${cssW}px;height:${cssH}px;pointer-events:none` });
   document.body.append(div);
   const c = fromMerc(ext.cx, ext.cy);
   const map = new maplibregl.Map({
-    container: div, style: vtBuildStyle(style, hidden), center: [c.lng, c.lat], zoom: Math.log2(EARTH_C / (512 * r * k)),
+    container: div, style: styleObj, center: [c.lng, c.lat], zoom: Math.log2(EARTH_C / (512 * r * k)),
     interactive: false, attributionControl: false, fadeDuration: 0, pixelRatio: k, maxZoom: 24,
     preserveDrawingBuffer: true, canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true }, maxCanvasSize: [8192, 8192],
   });
@@ -547,9 +552,14 @@ function prLegendBox(ctx, mm, items, maxH) {
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.font = `500 ${fs}px ${PR_FONT}`;
+      } else if (it.type === "head") {
+        ctx.fillStyle = "#111";
+        ctx.font = `700 ${fs}px ${PR_FONT}`;
+        ctx.fillText(prFit(ctx, it.text, w - pad * 2), x + pad, my);
+        ctx.font = `500 ${fs}px ${PR_FONT}`;
       } else {
         ctx.fillStyle = "#111";
-        ctx.fillText(it.text, it.type === "text" ? x + pad : tx, my);
+        ctx.fillText(prFit(ctx, String(it.text), w - (it.type === "text" ? pad * 2 : pad * 2 + sw + 1.5 * mm)), it.type === "text" ? x + pad : tx, my);
       }
       cy += it.h;
     }
@@ -610,7 +620,9 @@ async function prRender(cfg, ext, onProgress = () => {}) {
   const credits = new Set();
   const pdfCredits = [];
   let demInfo = null;
-  const tileSteps = cands.filter((c) => ["tile", "vector", "dem", "pdf"].includes(c.kind));
+  // データのレイヤは 1 回でまとめて描く
+  const dataKeys = cands.filter((c) => c.kind === "data").map((c) => c.key);
+  const tileSteps = cands.filter((c, i) => ["tile", "vector", "dem", "pdf"].includes(c.kind) || (c.kind === "data" && cands.findIndex((x) => x.kind === "data") === i));
   let stepNo = 0;
   for (const c of tileSteps) {
     stepNo++;
@@ -627,6 +639,17 @@ async function prRender(cfg, ext, onProgress = () => {}) {
       } else if (c.kind === "vector") {
         await prDrawVector(lctx, ext, r, k, mw, mh);
         credits.add("国土地理院（地理院地図Vector）");
+      } else if (c.kind === "data") {
+        await prDrawVector(lctx, ext, r, k, mw, mh, dataPrintStyle(dataKeys));
+        for (const cr of dataCredits(dataKeys)) credits.add(cr);
+        for (const g of dataLegendGroups(dataKeys)) {
+          legend.push({ type: "head", text: g.title });
+          for (const it of g.items) {
+            if (it.kind === "ramp") legend.push({ type: "ramp", text: it.text || "", colors: it.ramp, lo: it.lo, hi: it.hi });
+            else if (it.kind === "text") legend.push({ type: "text", text: it.text });
+            else legend.push({ type: it.kind === "dot" ? "memo" : it.kind === "line" ? "line" : "box", color: it.color, text: it.text });
+          }
+        }
       } else if (c.kind === "dem") {
         demInfo = await prDrawDem(lctx, ext, r, k, progress);
         credits.add("国土地理院（標高タイル）");
@@ -640,7 +663,7 @@ async function prRender(cfg, ext, onProgress = () => {}) {
       console.warn("印刷：描けないレイヤ", c.name, e);
       toast(`「${c.name}」を描けませんでした：${e.message}`, 4000);
     }
-    mctx.globalAlpha = c.kind === "tile" ? c.opacity : c.kind === "dem" ? c.opacity : 1;
+    mctx.globalAlpha = c.kind === "tile" ? c.opacity : c.kind === "dem" ? c.opacity : 1; // データは色の透明度をスタイルに含む
     mctx.drawImage(layerC, 0, 0);
     mctx.globalAlpha = 1;
   }

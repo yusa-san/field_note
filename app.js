@@ -333,7 +333,7 @@ function initMap() {
     S.thumbMode = tm;
     for (const id of S.memoThumb.keys()) { const m = S.memos.get(id); if (m) renderMarker(m); }
   });
-  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng)));
+  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng) || dataLayerClick(e.latlng)));
   S.map.on("contextmenu", (e) => onLongPress(e.latlng));
   setupLongPress();
   return !saved; // 初回起動なら最初の測位位置へ移動する
@@ -723,6 +723,7 @@ function openLayers() {
     h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
     h("div", { class: "sect-title" }, "標高（1m 標高タイル）"), demPanelRow(),
+    h("div", { class: "sect-title" }, "データを重ねる（緑・不動産情報ライブラリ・e-Stat）"), dataPanelRow(),
     h("div", { class: "sect-title" }, "PDF・画像から追加した地図"), pdfLayersSection(),
     h("button", { type: "button", class: "btn secondary block", style: "margin-top:14px", onclick: openPrint }, "この地図を印刷・PDF・画像に出力"),
     h("p", { class: "note" }, "出典：国土地理院（地理院タイル）、ハザードマップポータルサイト、OpenStreetMap。ハザード情報は自治体の公表資料もあわせて確認してください。"),
@@ -2470,6 +2471,7 @@ async function main() {
   bindUI();
   moveToFirstFix = initMap();
   demRestore();
+  dataRestore();
   try {
     await resumeTrackIfAny();
     await loadMemos();
