@@ -2148,7 +2148,7 @@ async function openMenu() {
 
   const last = Settings.data.lastExportAt;
   // 内容が多いので、タブで分ける（最後に開いたタブを覚える）
-  const TABS = [["save", "保存"], ["load", "読み込み"], ["map", "地図・印刷"], ["track", "軌跡"], ["settings", "設定"]];
+  const TABS = [["save", "保存・印刷"], ["load", "読み込み"], ["track", "軌跡"], ["settings", "設定"]];
   const panes = {
     save: h("div", {},
       h("dl", { class: "kv" },
@@ -2169,17 +2169,7 @@ async function openMenu() {
       exportRow("CSV", "csv"),
       h("div", { style: "height:6px" }),
       exportRow("GPX", "gpx"),
-      h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。")),
-    load: h("div", {},
-      h("div", { class: "sect-title" }, "メモ・軌跡として読み込む"),
-      h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
-      h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
-      h("div", { class: "sect-title" }, "地点をまとめて入力"),
-      bulkPointsBox(),
-      h("div", { class: "sect-title" }, "地図に重ねる"),
-      h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "ファイルを地図に重ねる（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
-      h("p", { class: "note" }, "メモにはせず、地図の上に表示だけします。「地図の切替」→「データを重ねる」でも管理できます。")),
-    map: h("div", {},
+      h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
       h("div", { class: "sect-title" }, "印刷・PDF・画像"),
       h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
       h("p", { class: "note" }, "用紙と縮尺を選び、地図の上の枠で範囲を合わせます。方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。範囲は Vector Studio の範囲ファイルで保存・読み込みできます。"),
@@ -2192,9 +2182,22 @@ async function openMenu() {
         await caches.delete("fn-tiles-rt");
         toast("地図キャッシュを削除しました");
       } }, "保存した地図を削除"),
-      h("p", { class: "note" }, "一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を保存しておくと安心です。"),
-      h("div", { class: "sect-title" }, "地図に重ねるデータ"),
-      h("button", { class: "btn secondary block", type: "button", onclick: openDataSheet }, "データを重ねる（緑・不動産情報ライブラリ・e-Stat・ファイル）")),
+      h("p", { class: "note" }, "一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を保存しておくと安心です。")),
+    load: h("div", {},
+      h("div", { class: "sect-title" }, "メモ・軌跡として読み込む"),
+      h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
+      h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
+      h("div", { class: "sect-title" }, "地点をまとめて入力"),
+      bulkPointsBox(),
+      h("div", { class: "sect-title" }, "ファイルを地図に重ねる"),
+      h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報を重ねる"),
+      h("div", { class: "sect-title" }, "API・オープンデータから重ねる"),
+      h("div", { class: "menu-grid" },
+        h("button", { class: "btn secondary", type: "button", onclick: openReinfoSheet }, "不動産情報ライブラリ"),
+        h("button", { class: "btn secondary", type: "button", onclick: openEstatSheet }, "e-Stat 統計")),
+      h("button", { class: "btn secondary block", type: "button", style: "margin-top:8px", onclick: openGreenSheet }, "東京都 緑のオープンデータ"),
+      h("p", { class: "note" }, "メモにはせず、地図の上に表示だけします。重ねたデータの表示・透明度・削除は「地図の切替」→「データを重ねる」でまとめて管理できます。"),
+      h("button", { class: "btn secondary block", type: "button", onclick: openDataSheet }, "重ねたデータを管理する")),
     track: h("div", {},
       h("div", { class: "sect-title" }, "記録した軌跡"),
       trackList,
