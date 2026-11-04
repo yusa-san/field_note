@@ -184,6 +184,20 @@ e-Stat API で統計表を検索し、表章項目・分類・時点を選んで
    - `ALLOWED_ORIGINS`（Text）：`https://yusa-san.github.io`（このサイト以外からは使えないようにする）
 4. アプリの「データを重ねる」→「不動産情報ライブラリ」に Worker の URL（`https://fieldnote-proxy.<アカウント>.workers.dev`）を入れる
 
+**動作確認**：設定を変えたら、次のコマンドで確認できます（`Origin` を付けないと、ほかのサイトからの利用を防ぐ設定のため 403 になります）。`secrets` で設定の有無、`reinfolib`・`estat` で Worker から各 API に届くか（応答の状態・時間・先頭の内容）が分かります。
+
+```bash
+curl -H "Origin: https://yusa-san.github.io" "https://fieldnote-proxy.<アカウント>.workers.dev/health"
+```
+
+e-Stat の検索を試すときは、日本語を URL エンコードして送ります。
+
+```bash
+curl -G -H "Origin: https://yusa-san.github.io" --data-urlencode "searchWord=人口" --data-urlencode "limit=3" "https://fieldnote-proxy.<アカウント>.workers.dev/estat/getStatsList"
+```
+
+うまくいかないときは、Worker の「Logs」でエラーを確認してください。API に届かないときは `{"error":"upstream fetch failed", ...}` が返ります。
+
 API の結果は Cloudflare のキャッシュに 1 日残り、端末にも残るので、同じ場所は 2 回目から速く表示されます。
 
 ## 地図の印刷・PDF・画像出力
