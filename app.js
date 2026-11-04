@@ -162,7 +162,7 @@ const DB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const rq = indexedDB.open("fieldnote", 3);
+      const rq = indexedDB.open("fieldnote", 4);
       rq.onupgradeneeded = () => {
         const db = rq.result;
         const has = (n) => db.objectStoreNames.contains(n);
@@ -174,6 +174,9 @@ const DB = {
         if (!has("overlayImages")) db.createObjectStore("overlayImages", { keyPath: "id" });
         // v3: 聞き取りの録音
         if (!has("audios")) db.createObjectStore("audios", { keyPath: "id" }).createIndex("memoId", "memoId");
+        // v4: 地図に重ねるファイル（設定と中身を分ける）
+        if (!has("layers")) db.createObjectStore("layers", { keyPath: "id" });
+        if (!has("layerData")) db.createObjectStore("layerData", { keyPath: "id" });
       };
       rq.onsuccess = () => res((this.db = rq.result));
       rq.onerror = () => rej(rq.error);
@@ -598,6 +601,11 @@ const elevCache = new Map();
 async function fetchElevation(lat, lon) {
   const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
   if (elevCache.has(key)) return elevCache.get(key);
+  // まず標高タイル（1m 標高があればその値。オフラインでも一度読んだ範囲は使える）
+  try {
+    const t = await demElevationAt(lat, lon);
+    if (t) { elevCache.set(key, t); return t; }
+  } catch {}
   try {
     const r = await fetch(`https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php?lon=${lon}&lat=${lat}&outtype=JSON`);
     const j = await r.json();
@@ -1959,8 +1967,23 @@ function tilesInView(def, zFrom, zTo) {
 }
 async function prefetchTiles(statusEl) {
   if (!("caches" in window)) return alert("この端末ではオフライン保存に対応していません");
-  const defs = [BASE_LAYERS.find((b) => b.id === S.baseId), ...Object.keys(S.overlays).map((id) => OVERLAYS.find((o) => o.id === id)),
+  // 地理院 Vector の最新データ（PMTiles）は 1 つの大きなファイルなので、タイルごとの範囲を読んで端末に残す
+  const vtPm = S.baseId === "gsivt" && vtSourceKind() === "pmtiles";
+  const defs = [vtPm ? null : BASE_LAYERS.find((b) => b.id === S.baseId), ...Object.keys(S.overlays).map((id) => OVERLAYS.find((o) => o.id === id)),
     demCfg().on ? { url: DEM_SOURCES[0].url, max: 17 } : null].filter(Boolean);
+  if (vtPm) {
+    const z0v = Math.floor(S.map.getZoom()), tiles = [];
+    for (const u of tilesInView({ url: "{z}/{x}/{y}" }, Math.min(16, Math.max(4, z0v)), Math.min(16, z0v + 2))) tiles.push(u.split("/").map(Number));
+    if (tiles.length > PREFETCH_LIMIT) return alert(`タイル数が多すぎます（${tiles.length}枚）。もう少しズームインしてください`);
+    if (!confirm(`地理院 Vector（最新データ）の表示範囲 ${tiles.length} 枚を端末に残します（自動キャッシュに入るため、容量が増えると古いものから消えます）。`)) return;
+    try {
+      await vtPrepareSource();
+      const pm = new pmtiles.PMTiles(VT_PMTILES);
+      let i = 0;
+      for (const [z, x, y] of tiles) { try { await pm.getZxy(z, x, y); } catch {} statusEl.textContent = `地理院 Vector を保存中… ${++i}/${tiles.length}`; }
+    } catch (e) { statusEl.textContent = "保存できませんでした：" + e.message; return; }
+    if (!defs.length) { statusEl.textContent = `保存しました（地理院 Vector ${tiles.length} 枚）`; return; }
+  }
   if (defs.some((d) => d.noPrefetch)) return alert("OpenStreetMap は利用規約により一括保存できません。地理院の地図に切り替えてください");
   const z0 = Math.floor(S.map.getZoom());
   let urls = [];
@@ -1989,6 +2012,50 @@ async function prefetchTiles(statusEl) {
   };
   await Promise.all(Array.from({ length: 4 }, worker));
   statusEl.textContent = `保存しました（${done} 枚${fail ? `、失敗 ${fail}` : ""}）`;
+}
+
+/** 地点をまとめて入力：1 行 1 地点「緯度, 経度, 名称」→ メモを作る */
+function parsePointLines(text) {
+  const out = [], bad = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) return;
+    const m = t.normalize("NFKC").match(/^(-?\d+(?:\.\d+)?)\s*[,\t、\s]\s*(-?\d+(?:\.\d+)?)\s*(?:[,\t、\s]\s*(.*))?$/);
+    if (!m) { bad.push(i + 1); return; }
+    let a = Number(m[1]), b = Number(m[2]);
+    const parts = [m[1], m[2], m[3] || ""];
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) [a, b] = [b, a]; // 経度, 緯度 の順でも受け付ける
+    if (Math.abs(a) > 90 || Math.abs(b) > 180) { bad.push(i + 1); return; }
+    out.push({ lat: a, lon: b, name: parts.slice(2).join(", ").trim() });
+  });
+  return { points: out, bad };
+}
+function bulkPointsBox() {
+  const ta = h("textarea", { rows: 5, placeholder: "35.4478, 139.6425, 横浜開港資料館\n35.4437, 139.6380, 山下公園\n（1 行 1 地点：緯度, 経度, 名称）" });
+  const cat = h("select", {}, ...Settings.data.categories.map((c) => h("option", { value: c, selected: c === "要確認" }, c)));
+  const status = h("div", { class: "note" });
+  const go = async () => {
+    const { points, bad } = parsePointLines(ta.value);
+    if (!points.length) return (status.textContent = "読み取れる行がありません（緯度, 経度, 名称 の順）");
+    if (!confirm(`${points.length} 地点をメモとして追加します${bad.length ? `（読めない行 ${bad.length}：${bad.slice(0, 8).join(", ")} 行目）` : ""}。`)) return;
+    for (const p of points) {
+      const m = newMemo({ lat: p.lat, lon: p.lon, source: "list" });
+      m.title = p.name;
+      m.category = cat.value;
+      S.memos.set(m.id, m);
+      await DB.put("memos", m);
+      renderMarker(m);
+      fillPlaceInfo(m.id);
+    }
+    updateCounts();
+    ta.value = "";
+    status.textContent = `${points.length} 地点を追加しました`;
+    const b = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+    setFollow(false);
+    S.map.fitBounds(b.pad(0.2), { maxZoom: 16 });
+  };
+  return h("div", {}, ta, h("label", {}, "カテゴリ", cat), h("button", { type: "button", class: "btn secondary block", onclick: go }, "メモとして追加"), status,
+    h("p", { class: "note" }, "調査予定地などのリストを貼り付けて、まとめてメモにできます。区切りはカンマ・タブ・空白。経度, 緯度 の順でも自動で判定します。"));
 }
 
 /* ====================================================================
@@ -2080,77 +2147,100 @@ async function openMenu() {
   renderTracks();
 
   const last = Settings.data.lastExportAt;
-  const body = h("div", {},
-    h("dl", { class: "kv" },
-      h("dt", {}, "メモ"), h("dd", {}, `${S.memos.size} 件`),
-      h("dt", {}, "写真"), h("dd", {}, `${photoCount} 枚`),
-      h("dt", {}, "軌跡"), h("dd", {}, `${tracks.length} 本`),
-      h("dt", {}, "最終書き出し"), h("dd", {}, last ? fmtDate(last) : "なし"),
-      h("dt", {}, "端末内の容量"), h("dd", {}, usage || "—")),
-
-    h("div", { class: "sect-title" }, "地図の印刷・画像出力"),
-    h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
-    h("p", { class: "note" }, "用紙と縮尺を選び、地図の上の枠で範囲を合わせます。方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。"),
-
-    h("div", { class: "sect-title" }, "書き出し（端末のファイルへ）"),
-    exportRow("ZIP（JSON＋写真）", "zip"),
-    h("p", { class: "note" }, "ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。写真は端末内に保存したものをそのまま入れます。"),
-    h("div", { style: "height:6px" }),
-    exportRow("JSON（全データ）", "json"),
-    h("label", { class: "inline", style: "margin:6px 0 4px;font-size:14px" }, inclPhotos, "JSON に写真を埋め込む（base64・ファイルが大きくなります）"),
-    h("div", { style: "height:6px" }),
-    exportRow("GeoJSON", "geojson"),
-    h("div", { style: "height:6px" }),
-    exportRow("CSV", "csv"),
-    h("div", { style: "height:6px" }),
-    exportRow("GPX", "gpx"),
-    h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。"),
-
-    h("div", { class: "sect-title" }, "読み込み"),
-    h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
-    h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
-
-    h("div", { class: "sect-title" }, "軌跡"),
-    trackList,
-
-    h("div", { class: "sect-title" }, "調査の設定"),
-    h("label", {}, "調査名（ファイル名とメモに記録）", proj),
-    h("label", {}, "記録者", obs),
-    h("div", { class: "lbl-plain" }, "カテゴリ"), cats,
-    h("label", {}, "写真の保存サイズ（端末内）", psize),
-    h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
-    h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
-    h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "録音＋書き起こしで、その場で文字にできなかったときは録音後に自動で書き起こす"),
-    h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn),
-    h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存"),
-
-    h("div", { class: "sect-title" }, "オフライン"),
-    h("button", { class: "btn secondary block", type: "button", onclick: () => prefetchTiles(prefStatus) }, "表示範囲の地図を端末に保存"),
-    prefStatus,
-    h("button", { class: "btn secondary block", type: "button", onclick: async () => {
-      if (!confirm("保存した地図タイル（自動キャッシュ含む）を削除しますか？メモは消えません。")) return;
-      await caches.delete("fn-tiles-saved");
-      await caches.delete("fn-tiles-rt");
-      toast("地図キャッシュを削除しました");
-    } }, "保存した地図を削除"),
-    h("p", { class: "note" }, "一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を保存しておくと安心です。"),
-
-    h("div", { class: "sect-title" }, "データの消去"),
-    h("button", { class: "btn danger block", type: "button", onclick: async () => {
-      if (!confirm("全てのメモ・写真・軌跡を端末から削除します。書き出し済みか確認してください。")) return;
-      if (!confirm("本当に削除しますか？元に戻せません。")) return;
-      await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks"); await DB.clear("audios");
-      for (const l of S.shownTracks.values()) S.map.removeLayer(l);
-      S.shownTracks.clear();
-      await loadMemos();
-      closeSheet(true);
-      toast("全データを削除しました");
-    } }, "全データを削除"),
-
-    h("p", { class: "note", style: "margin-top:16px" },
-      "使い方：画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は地理院の標高 API（DEM）による値で、GPS高度とは別に記録されます。"),
-  );
-  openSheet("保存・設定", body);
+  // 内容が多いので、タブで分ける（最後に開いたタブを覚える）
+  const TABS = [["save", "保存"], ["load", "読み込み"], ["map", "地図・印刷"], ["track", "軌跡"], ["settings", "設定"]];
+  const panes = {
+    save: h("div", {},
+      h("dl", { class: "kv" },
+        h("dt", {}, "メモ"), h("dd", {}, `${S.memos.size} 件`),
+        h("dt", {}, "写真"), h("dd", {}, `${photoCount} 枚`),
+        h("dt", {}, "軌跡"), h("dd", {}, `${tracks.length} 本`),
+        h("dt", {}, "最終書き出し"), h("dd", {}, last ? fmtDate(last) : "なし"),
+        h("dt", {}, "端末内の容量"), h("dd", {}, usage || "—")),
+      h("div", { class: "sect-title" }, "書き出し（端末のファイルへ）"),
+      exportRow("ZIP（JSON＋写真）", "zip"),
+      h("p", { class: "note" }, "ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。写真は端末内に保存したものをそのまま入れます。"),
+      h("div", { style: "height:6px" }),
+      exportRow("JSON（全データ）", "json"),
+      h("label", { class: "inline", style: "margin:6px 0 4px;font-size:14px" }, inclPhotos, "JSON に写真を埋め込む（base64・ファイルが大きくなります）"),
+      h("div", { style: "height:6px" }),
+      exportRow("GeoJSON", "geojson"),
+      h("div", { style: "height:6px" }),
+      exportRow("CSV", "csv"),
+      h("div", { style: "height:6px" }),
+      exportRow("GPX", "gpx"),
+      h("p", { class: "note" }, "ZIP と JSON はこのアプリで再読み込みできる完全なバックアップです（JSON は写真を埋め込んだ場合のみ写真も復元）。GeoJSON は QGIS 等の GIS、CSV は Excel、GPX は登山・GPS アプリ向け。iPhone では「共有…」→「ファイルに保存」が確実です。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。")),
+    load: h("div", {},
+      h("div", { class: "sect-title" }, "メモ・軌跡として読み込む"),
+      h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ZIP / JSON / GeoJSON / GPX を読み込む"), fileIn,
+      h("p", { class: "note" }, "同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。"),
+      h("div", { class: "sect-title" }, "地点をまとめて入力"),
+      bulkPointsBox(),
+      h("div", { class: "sect-title" }, "地図に重ねる"),
+      h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "ファイルを地図に重ねる（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
+      h("p", { class: "note" }, "メモにはせず、地図の上に表示だけします。「地図の切替」→「データを重ねる」でも管理できます。")),
+    map: h("div", {},
+      h("div", { class: "sect-title" }, "印刷・PDF・画像"),
+      h("button", { class: "btn primary block", type: "button", onclick: openPrint }, "範囲を決めて印刷・PDF・画像に出力"),
+      h("p", { class: "note" }, "用紙と縮尺を選び、地図の上の枠で範囲を合わせます。方位記号・スケールバー・凡例を入れられ、印刷するレイヤやメモ・軌跡も選べます。範囲は Vector Studio の範囲ファイルで保存・読み込みできます。"),
+      h("div", { class: "sect-title" }, "オフライン"),
+      h("button", { class: "btn secondary block", type: "button", onclick: () => prefetchTiles(prefStatus) }, "表示範囲の地図を端末に保存"),
+      prefStatus,
+      h("button", { class: "btn secondary block", type: "button", onclick: async () => {
+        if (!confirm("保存した地図タイル（自動キャッシュ含む）を削除しますか？メモは消えません。")) return;
+        await caches.delete("fn-tiles-saved");
+        await caches.delete("fn-tiles-rt");
+        toast("地図キャッシュを削除しました");
+      } }, "保存した地図を削除"),
+      h("p", { class: "note" }, "一度表示した地図は自動で端末に残り、電波が弱い場所でも表示できます。山間部などに行く前に、Wi-Fi 環境で対象範囲を保存しておくと安心です。"),
+      h("div", { class: "sect-title" }, "地図に重ねるデータ"),
+      h("button", { class: "btn secondary block", type: "button", onclick: openDataSheet }, "データを重ねる（緑・不動産情報ライブラリ・e-Stat・ファイル）")),
+    track: h("div", {},
+      h("div", { class: "sect-title" }, "記録した軌跡"),
+      trackList,
+      h("p", { class: "note" }, "記録は右の軌跡ボタンで開始・終了します。画面を消すと記録が止まる端末では、GPS ロガーアプリで記録して GPX を「読み込み」タブから取り込んでください。")),
+    settings: h("div", {},
+      h("div", { class: "sect-title" }, "調査"),
+      h("label", {}, "調査名（ファイル名とメモに記録）", proj),
+      h("label", {}, "記録者", obs),
+      h("div", { class: "lbl-plain" }, "カテゴリ"), cats,
+      h("div", { class: "sect-title" }, "写真・聞き取り"),
+      h("label", {}, "写真の保存サイズ（端末内）", psize),
+      h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
+      h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
+      h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "録音＋書き起こしで、その場で文字にできなかったときは録音後に自動で書き起こす"),
+      h("details", { class: "adv" }, h("summary", {}, "詳細設定"),
+        h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn)),
+      h("button", { class: "btn primary block", type: "button", style: "margin-top:12px", onclick: saveSettings }, "設定を保存"),
+      h("div", { class: "sect-title" }, "データの消去"),
+      h("button", { class: "btn danger block", type: "button", onclick: async () => {
+        if (!confirm("全てのメモ・写真・軌跡を端末から削除します。書き出し済みか確認してください。")) return;
+        if (!confirm("本当に削除しますか？元に戻せません。")) return;
+        await DB.clear("memos"); await DB.clear("photos"); await DB.clear("tracks"); await DB.clear("audios");
+        for (const l of S.shownTracks.values()) S.map.removeLayer(l);
+        S.shownTracks.clear();
+        await loadMemos();
+        closeSheet(true);
+        toast("全データを削除しました");
+      } }, "全データを削除"),
+      h("p", { class: "note", style: "margin-top:16px" },
+        "使い方：画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は国土地理院の標高タイル（1m があればその値、なければ 5m・10m）または標高 API による値で、GPS高度とは別に記録されます。")),
+  };
+  let cur = "save";
+  try { const t = localStorage.getItem("fn.menuTab"); if (panes[t]) cur = t; } catch {}
+  const tabBar = h("div", { class: "menu-tabs", role: "tablist" });
+  const paneBox = h("div", { class: "menu-pane" });
+  const show = (k) => {
+    cur = k;
+    try { localStorage.setItem("fn.menuTab", k); } catch {}
+    tabBar.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b.dataset.k === k); b.setAttribute("aria-selected", b.dataset.k === k); });
+    paneBox.replaceChildren(panes[k]);
+    $("#sheet-body").scrollTop = 0;
+  };
+  for (const [k, t] of TABS) tabBar.append(h("button", { type: "button", role: "tab", "data-k": k, onclick: () => show(k) }, t));
+  const body = h("div", {}, tabBar, paneBox);
+  show(cur);
+  openSheet("保存・設定", body, { height: "86vh" });
 }
 
 /* ====================================================================

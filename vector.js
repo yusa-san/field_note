@@ -10,6 +10,18 @@
 
 const VT_TILES = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/{z}/{x}/{y}.pbf";
 const VT_STYLE_URL = "https://gsi-cyberjapan.github.io/optimal_bvmap/style/std.json";
+const VT_PMTILES = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/optimal_bvmap-v1.pmtiles";
+/** データの配信形式：xyz（従来・更新 2023-10、表示範囲を端末に保存できる）／pmtiles（更新 2026-04 の新しいデータ） */
+const vtSourceKind = () => (Settings.data.vtSource === "pmtiles" ? "pmtiles" : "xyz");
+const vtSourceSpec = () => (vtSourceKind() === "pmtiles"
+  ? { type: "vector", url: "pmtiles://" + VT_PMTILES, attribution: "国土地理院 最適化ベクトルタイル（PMTiles）" }
+  : { type: "vector", tiles: [VT_TILES], minzoom: 4, maxzoom: 16, attribution: "国土地理院 最適化ベクトルタイル" });
+/** PMTiles を使うときは読み込み用の仕組み（datalayers.js）を用意 */
+async function vtPrepareSource() {
+  if (vtSourceKind() !== "pmtiles") return;
+  await loadPmtiles();
+  addProtocols();
+}
 const MAPLIBRE_JS = "https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js";
 const MAPLIBRE_CSS = "https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css";
 const MAPLIBRE_LEAFLET_JS = "https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js";
@@ -210,6 +222,8 @@ function vtBuildStyle(presetKey, hidden = []) {
       s.glyphs = s.glyphs || vtBaseStyle.glyphs;
     }
   } else s = JSON.parse(JSON.stringify(vtBaseStyle));
+  // 地理院のタイルを参照するデータを、選んだ配信形式にそろえる
+  for (const [k, src] of Object.entries(s.sources)) if (src.tiles?.[0] === VT_TILES) s.sources[k] = vtSourceSpec();
   const hide = new Set(hidden);
   const hiddenLayers = new Set(VT_GROUPS.filter((g) => hide.has(g.key) && !g.mode).flatMap((g) => g.layers));
   const textOff = hide.has("label_text"), iconOff = hide.has("label_icon");
@@ -264,6 +278,7 @@ const vtSettings = () => ({ style: Settings.data.vtStyle || "std", hidden: Setti
 async function makeVectorBase() {
   await vtLoadLibs();
   await vtLoadBaseStyle();
+  await vtPrepareSource();
   const { style, hidden } = vtSettings();
   const layer = L.maplibreGL({ style: vtBuildStyle(style, hidden), interactive: false, attributionControl: false, pane: "tilePane" });
   layer.on("add", () => { const c = layer.getContainer?.() || layer._container; if (c) c.style.zIndex = 1; });
@@ -388,7 +403,21 @@ function openVectorStyleSheet() {
     loadJson(async () => { const r = await fetch(u); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); }, u.split("/").pop().replace(/\.json.*$/i, ""));
   };
   render();
-  openSheet("地理院 Vector のスタイル", h("div", {}, vtBackButton(), grid, customBox,
+  // データの配信形式
+  const srcSel = h("div", { class: "seg" }, ...[["xyz", "従来（2023-10）"], ["pmtiles", "最新（2026-04）"]].map(([k, t]) => {
+    const b = h("button", { type: "button", class: vtSourceKind() === k ? "on" : "" }, t);
+    b.onclick = async () => {
+      Settings.data.vtSource = k;
+      Settings.save();
+      srcSel.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      try { await vtPrepareSource(); vtApply(); } catch (e) { toast(e.message, 4000); }
+    };
+    return b;
+  }));
+  openSheet("地理院 Vector のスタイル", h("div", {}, vtBackButton(),
+    h("div", { class: "lbl-plain", style: "margin-top:0" }, "データ（国土地理院の配信）"), srcSel,
+    h("p", { class: "note", style: "margin-top:4px" }, "最新は PMTiles 版（更新情報 2026-04-01）。従来は XYZ 版（2023-10-01）で、「表示範囲の地図を端末に保存」でまとめて保存できます。どちらも一度表示した範囲は端末に残ります。"),
+    grid, customBox,
     h("div", { class: "sect-title" }, "スタイル JSON を読み込む"),
     h("button", { type: "button", class: "btn secondary block", onclick: () => fileIn.click() }, "JSON ファイルを選ぶ"), fileIn,
     h("div", { class: "gr-search", style: "margin-top:8px" }, urlIn, h("button", { type: "button", class: "chip", onclick: fromUrl }, "URL から")),

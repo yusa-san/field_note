@@ -82,7 +82,7 @@ function ovlReady() {
     const pane = S.map.getPane("dataPane") || S.map.createPane("dataPane");
     pane.style.zIndex = 330; // 地図タイルの上、PDF 地図（350）の下
     pane.style.pointerEvents = "none";
-    OVL.layer = L.maplibreGL({ style: { version: 8, sources: {}, layers: [] }, interactive: false, attributionControl: false, pane: "dataPane" }).addTo(S.map);
+    OVL.layer = L.maplibreGL({ style: { version: 8, glyphs: VT_GLYPHS, sources: {}, layers: [] }, interactive: false, attributionControl: false, pane: "dataPane" }).addTo(S.map);
     OVL.map = OVL.layer.getMaplibreMap();
     if (!OVL.map.isStyleLoaded()) await new Promise((r) => OVL.map.once("load", r));
     OVL.map.on("idle", () => scheduleDataRefresh());
@@ -91,12 +91,12 @@ function ovlReady() {
   OVL.ready.catch(() => { OVL.ready = null; });
   return OVL.ready;
 }
-/** レイヤを決まった順に並べる（下から：e-Stat → 不動産情報ライブラリ → 緑） */
+/** レイヤを決まった順に並べる（下から：e-Stat → 不動産情報ライブラリ → 緑 → 読み込んだファイル） */
 function ovlOrder() {
   const m = OVL.map;
   if (!m) return;
   const ids = m.getStyle().layers.map((l) => l.id);
-  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : 2);
+  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : id.startsWith("im-") ? 3 : 2);
   const sorted = [...ids].sort((a, b) => rank(a) - rank(b) || ids.indexOf(a) - ids.indexOf(b));
   for (const id of sorted) m.moveLayer(id);
 }
@@ -508,12 +508,14 @@ async function estatApplyAll() {
  * 共通：起動時の復元・凡例・タップ・印刷用
  * ==================================================================== */
 async function dataRestore() {
-  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on);
+  await imLoadAll();
+  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on) || IMP.list.some((l) => l.on);
   if (!any) return;
   try {
     await greenApply();
     await reinfoApplyAll();
     await estatApplyAll();
+    await imApplyAll();
   } catch (e) {
     console.warn("データの重ね合わせを復元できません", e);
   }
@@ -573,7 +575,7 @@ function dataLegendGroups(filterKeys) {
     }
     out.push({ key: "data:es:" + lay.id, title: `${lay.title}${lay.unit ? `（${lay.unit}）` : ""}`, items });
   }
-  return out;
+  return out.concat(imLegendGroups(filterKeys));
 }
 const fmtNum = (v) => (v == null || !Number.isFinite(v) ? "—" : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("ja-JP") : String(+v.toPrecision(3)));
 
@@ -605,7 +607,7 @@ function dataLayerClick(latlng) {
   const m = OVL.map;
   if (!m) return false;
   const p = m.project([latlng.lng, latlng.lat]);
-  const ids = m.getStyle().layers.map((l) => l.id).filter((id) => /^(gr|ri|es)-/.test(id));
+  const ids = m.getStyle().layers.map((l) => l.id).filter((id) => /^(gr|ri|es|im)-/.test(id));
   if (!ids.length) return false;
   let feats = [];
   try { feats = m.queryRenderedFeatures([[p.x - 7, p.y - 7], [p.x + 7, p.y + 7]], { layers: ids }); } catch { return false; }
@@ -628,6 +630,11 @@ function dataLayerClick(latlng) {
       title = (api.title && pr[api.title]) || api.name;
       rows = Object.entries(pr).map(([k, v]) => [api.props[k] || k, v]);
       rows.unshift(["データ", api.name]);
+    } else if (f.layer.id.startsWith("im-")) {
+      const rec = IMP.list.find((x) => f.layer.id.startsWith(`im-${x.id}-`));
+      title = (rec?.label && pr[rec.label]) || pr["名称"] || pr.name || pr.NAME || pr["項目"] || rec?.name || "";
+      rows = Object.entries(pr).filter(([k]) => k !== "fgdFeature").map(([k, v]) => [k, v]);
+      rows.unshift(["データ", rec?.name || ""]);
     } else {
       const lay = estatCfg().layers.find((l) => f.layer.id.startsWith(`es-${l.id}-`));
       title = pr.name;
@@ -646,6 +653,7 @@ function dataPrintCandidates() {
   if (greenCfg().on && OVL.map?.getSource("green")) out.push({ key: "data:green", name: "東京都 緑のオープンデータ", kind: "data" });
   for (const [id, lc] of Object.entries(reinfoCfg().layers)) if (lc.on && OVL.map?.getSource(`ri-${id}`)) out.push({ key: "data:ri:" + id, name: reinfoApi(id).name, kind: "data" });
   for (const lay of estatCfg().layers) if (lay.on && OVL.map?.getSource(`es-${lay.id}`)) out.push({ key: "data:es:" + lay.id, name: `e-Stat：${lay.title}`, kind: "data" });
+  for (const rec of IMP.list) if (rec.on && OVL.map?.getSource(`im-${rec.id}`)) out.push({ key: "data:im:" + rec.id, name: `ファイル：${rec.name}`, kind: "data" });
   return out;
 }
 /** 印刷用：選んだキーのレイヤだけを含むスタイル */
@@ -653,17 +661,22 @@ function dataPrintStyle(keys) {
   const st = OVL.map.getStyle();
   const keep = (id) => (id.startsWith("gr-") && keys.includes("data:green"))
     || (id.startsWith("ri-") && keys.includes("data:ri:" + id.split("-")[1]))
-    || (id.startsWith("es-") && keys.includes("data:es:" + id.split("-")[1]));
+    || (id.startsWith("es-") && keys.includes("data:es:" + id.split("-")[1]))
+    || (id.startsWith("im-") && keys.includes("data:im:" + id.split("-")[1]));
   const layers = st.layers.filter((l) => keep(l.id));
   const used = new Set(layers.map((l) => l.source));
   const sources = Object.fromEntries(Object.entries(st.sources).filter(([k]) => used.has(k)));
-  return { version: 8, sources, layers };
+  return { version: 8, glyphs: st.glyphs, sources, layers };
 }
 function dataCredits(keys) {
   const c = [];
   if (keys.includes("data:green")) c.push(GREEN_ATTR + "（CC BY 4.0）");
   if (keys.some((k) => k.startsWith("data:ri:"))) c.push("不動産情報ライブラリ（国土交通省）");
   if (keys.some((k) => k.startsWith("data:es:"))) c.push("政府統計の総合窓口（e-Stat）・Geoshape 市区町村界（CODH, 国土数値情報 行政区域を加工）");
+  const im = IMP.list.filter((r) => keys.includes("data:im:" + r.id));
+  if (im.some((r) => r.kind === "fgd")) c.push("基盤地図情報（国土地理院）");
+  const other = im.filter((r) => r.kind !== "fgd");
+  if (other.length) c.push("読み込んだデータ：" + other.map((r) => r.name).join("、"));
   return c;
 }
 
@@ -689,7 +702,9 @@ function dataPanelRow() {
     h("div", { class: "dem-tools" }, h("button", { type: "button", class: "btn secondary", onclick: openGreenSheet }, "表示する分類・凡例")),
     h("div", { class: "menu-grid", style: "margin-top:6px" },
       h("button", { type: "button", class: "btn secondary", onclick: openReinfoSheet }, `不動産情報ライブラリ${nRi ? `（${nRi}）` : ""}`),
-      h("button", { type: "button", class: "btn secondary", onclick: openEstatSheet }, `e-Stat 統計${nEs ? `（${nEs}）` : ""}`)));
+      h("button", { type: "button", class: "btn secondary", onclick: openEstatSheet }, `e-Stat 統計${nEs ? `（${nEs}）` : ""}`)),
+    h("div", { class: "lbl-plain", style: "margin-top:12px;font-weight:700" }, "ファイルから（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
+    imPanel());
 }
 function openDataSheet() {
   openSheet("データを重ねる", h("div", {}, dataBack(), dataPanelRow()), { backdrop: false, height: "62vh" });

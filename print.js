@@ -152,6 +152,73 @@ function prUpdateFrame() {
 }
 
 /* ====================================================================
+ * 範囲ファイル（Vector Studio の vector-studio-range 形式と相互にやり取り）
+ *  rect_world：Web メルカトルの正規化座標 [x0, y0, x1, y1]（0〜1・y は下向き）、bbox_wgs84：[西, 南, 東, 北]
+ * ==================================================================== */
+const prR7 = (v) => Math.round(v * 1e7) / 1e7;
+const prNormX = (mx) => (mx + EARTH_C / 2) / EARTH_C, prNormY = (my) => (EARTH_C / 2 - my) / EARTH_C;
+const prLonOf = (x) => x * 360 - 180, prLatOf = (y) => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
+function prSaveRange() {
+  const cfg = prCfg(), ext = prExtent(cfg);
+  const r = [prNormX(ext.minX), prNormY(ext.maxY), prNormX(ext.maxX), prNormY(ext.minY)];
+  const g = [prLonOf(r[0]), prLatOf(r[3]), prLonOf(r[2]), prLatOf(r[1])].map(prR7);
+  const cos = Math.cos(rad(ext.lat));
+  const size = { width: Math.round(ext.w * cos * 10) / 10, height: Math.round(ext.h * cos * 10) / 10 };
+  const name = cfg.title || Settings.data.project || "印刷範囲";
+  const doc = {
+    type: "FeatureCollection", name: "vector-studio-range", bbox: g,
+    vectorStudioRange: {
+      format: "vector-studio-range", version: "1.0.0", app: "フィールドノート", createdAt: new Date().toISOString(), name, from: "rect",
+      rect_world: r, bbox_wgs84: g, center_wgs84: [prR7((g[0] + g[2]) / 2), prR7(prLatOf((r[1] + r[3]) / 2))], size_m: size,
+      crs: { geometry: "OGC:CRS84（経度, 緯度・WGS84）", rect_world: "Webメルカトル正規化座標 [x0, y0, x1, y1]（0〜1・y は下向き。x=(経度+180)/360）" },
+      fieldnote: { paper: cfg.paper, orient: cfg.orient, scale: cfg.scale || prRound3(ext.scale) },
+    },
+    features: [{ type: "Feature", properties: { name, kind: "output-range", west: g[0], south: g[1], east: g[2], north: g[3], width_m: size.width, height_m: size.height },
+      geometry: { type: "Polygon", coordinates: [[[g[0], g[1]], [g[2], g[1]], [g[2], g[3]], [g[0], g[3]], [g[0], g[1]]]] } }],
+  };
+  deliverBlob(new Blob([JSON.stringify(doc, null, 1)], { type: "application/geo+json" }), `vector-studio-range_${(safeName(name) || "").replace(/[^\x21-\x7e]/g, "") || "fieldnote"}_${stamp()}.geojson`, "application/geo+json", "download");
+  toast(`範囲（${fmtDist(size.width)} × ${fmtDist(size.height)}）を保存しました`);
+}
+/** 範囲ファイル・GeoJSON・KML・.gsf から [西, 南, 東, 北] を得る */
+async function prRangeFromFile(f) {
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  if (ext === "gsf") return { box: imGsfBox(await f.arrayBuffer()), label: "jSTAT MAP の全地域" };
+  if (ext === "kml") return { box: imBbox(imParseKml(imDecodeText(await f.arrayBuffer()), f.name).features), label: "KML の全図形" };
+  const o = JSON.parse(imDecodeText(await f.arrayBuffer()));
+  const vr = o.vectorStudioRange || (o.format === "vector-studio-range" ? o : null);
+  if (vr) {
+    if (Array.isArray(vr.bbox_wgs84)) return { box: vr.bbox_wgs84, label: `範囲ファイル「${vr.name || ""}」`, fieldnote: vr.fieldnote };
+    if (Array.isArray(vr.rect_world)) { const r = vr.rect_world; return { box: [prLonOf(r[0]), prLatOf(r[3]), prLonOf(r[2]), prLatOf(r[1])], label: "範囲ファイル" }; }
+  }
+  if (Array.isArray(o.bounds) && o.bounds.length === 4) return { box: o.bounds, label: "manifest の範囲" };
+  return { box: imBbox(imParseGeoJSON(o, f.name).features), label: "GeoJSON の全図形" };
+}
+async function prLoadRange(f) {
+  const { box, label, fieldnote } = await prRangeFromFile(f);
+  if (!box || !(box[2] > box[0] && box[3] > box[1])) throw new Error("範囲の幅または高さが 0 です");
+  if (box.some((v) => !Number.isFinite(v)) || Math.abs(box[0]) > 180 || Math.abs(box[3]) > 85.06) throw new Error("経緯度の範囲ではありません");
+  const [x0, y0] = toMerc(box[1], box[0]), [x1, y1] = toMerc(box[3], box[2]);
+  const latC = (box[1] + box[3]) / 2, cos = Math.cos(rad(latC));
+  const gw = (x1 - x0) * cos, gh = (y1 - y0) * cos;
+  const cur = prCfg();
+  // 範囲の形に近い向きを選び、範囲全体が入る縮尺（上 2 桁で切り上げ）にする
+  const orient = fieldnote?.orient || (gw >= gh ? "landscape" : "portrait");
+  const L0 = prLayout({ ...cur, orient });
+  let scale = fieldnote?.scale || Math.max(gw / (L0.map.w / 1000), gh / (L0.map.h / 1000));
+  if (!fieldnote?.scale) { const p = 10 ** Math.max(0, Math.floor(Math.log10(scale)) - 1); scale = Math.ceil(scale / p) * p; }
+  prSave({ orient, scale: Math.round(scale), ...(fieldnote?.paper ? { paper: fieldnote.paper } : {}) });
+  const c = fromMerc((x0 + x1) / 2, (y0 + y1) / 2);
+  closeSheet(true);
+  if (!PR.active) openPrint();
+  const a = prAvailRect(), mpcNeeded = Math.max((x1 - x0) / (a.w * 0.92), (y1 - y0) / (a.h * 0.92));
+  const z = Math.max(3, Math.min(19, Math.floor(Math.log2(EARTH_C / (256 * mpcNeeded)))));
+  setFollow(false);
+  S.map.setView(c, z, { animate: false });
+  prUpdateFrame();
+  toast(`${label}を読み込みました（${fmtDist(gw)} × ${fmtDist(gh)}・縮尺 1:${prFmt(scale)}）`, 4000);
+}
+
+/* ====================================================================
  * 設定
  * ==================================================================== */
 function openPrintSettings() {
@@ -166,7 +233,9 @@ function openPrintSettings() {
   title.oninput = () => set({ title: title.value });
   const paper = sel(Object.fromEntries(Object.keys(PR_PAPERS).map((k) => [k, k])), cfg.paper, (v) => set({ paper: v }));
   const orient = sel({ portrait: "縦", landscape: "横" }, cfg.orient, (v) => set({ orient: v }));
-  const scale = sel(Object.fromEntries(PR_SCALES.map((s) => [s, s ? `1:${prFmt(s)}` : "枠の大きさで決める（拡大縮小で調整）"])), cfg.scale, (v) => set({ scale: Number(v) }));
+  const scaleOpts = Object.fromEntries(PR_SCALES.map((s) => [s, s ? `1:${prFmt(s)}` : "枠の大きさで決める（拡大縮小で調整）"]));
+  if (cfg.scale && !PR_SCALES.includes(cfg.scale)) scaleOpts[cfg.scale] = `1:${prFmt(cfg.scale)}（読み込んだ範囲から）`;
+  const scale = sel(scaleOpts, cfg.scale, (v) => set({ scale: Number(v) }));
   const dpi = sel(PR_DPIS, cfg.dpi, (v) => set({ dpi: Number(v) }));
   const size = sel(PR_SIZES, cfg.size, (v) => set({ size: Number(v) }));
   const north = sel(PR_CORNERS, cfg.north, (v) => set({ north: v }));
@@ -190,6 +259,8 @@ function openPrintSettings() {
     if (c.kind === "memos") layers.append(h("label", { class: "inline pr-sub" }, labelsCb, "メモのタイトルも入れる"));
   }
 
+  const rangeIn = h("input", { type: "file", hidden: true, accept: ".geojson,.json,.kml,.gsf" });
+  rangeIn.onchange = async () => { const f = rangeIn.files[0]; rangeIn.value = ""; if (f) { try { await prLoadRange(f); } catch (e) { alert("範囲を読み込めませんでした：" + e.message); } } };
   const body = h("div", { class: "pr-settings" },
     h("label", {}, "タイトル（空欄なら入れない）", title),
     h("div", { class: "pr-grid" }, h("label", {}, "用紙", paper), h("label", {}, "向き", orient)),
@@ -198,6 +269,11 @@ function openPrintSettings() {
     h("div", { class: "sect-title" }, "印刷するもの"),
     h("p", { class: "note", style: "margin-top:0" }, "いま地図に表示しているレイヤから選べます。ほかのレイヤは「地図の切替」で表示してから選んでください。"),
     layers,
+    h("div", { class: "sect-title" }, "範囲ファイル（Vector Studio と共通）"),
+    h("div", { class: "menu-grid" },
+      h("button", { type: "button", class: "btn secondary", onclick: prSaveRange }, "範囲を保存"),
+      h("button", { type: "button", class: "btn secondary", onclick: () => rangeIn.click() }, "範囲を読み込む")), rangeIn,
+    h("p", { class: "note" }, "今の印刷範囲を範囲ファイル（GeoJSON・vector-studio-range 形式）に保存します。Vector Studio の範囲ファイルのほか、GeoJSON・KML・.gsf を読み込むと、その全体が収まる縮尺と範囲にします。"),
     h("div", { class: "sect-title" }, "配置"),
     h("div", { class: "pr-grid" }, h("label", {}, "方位記号", north), h("label", {}, "スケールバー", sbar)),
     h("label", { class: "inline" }, legendCb, "凡例を入れる"),
@@ -267,6 +343,7 @@ async function prDrawVector(lctx, ext, r, k, mw, mh, styleObj) {
   await vtLoadLibs();
   if (!styleObj) {
     await vtLoadBaseStyle();
+    await vtPrepareSource();
     const { style, hidden } = vtSettings();
     styleObj = vtBuildStyle(style, hidden);
   }

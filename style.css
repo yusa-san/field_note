@@ -527,3 +527,20 @@ body.print-mode .data-legend { display: none !important; }
 .vt-card.vt-custom { cursor: pointer; }
 .vt-card.vt-custom .vt-lab { font-size: 12px; margin: 4px 0 2px; padding: 0 8px; gap: 6px; }
 .vt-card.vt-custom .chip { display: inline-block; margin: 2px 8px 8px; padding: 3px 10px; font-size: 12px; }
+
+/* 切り替えボタン（2〜4 択） */
+.seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { flex: 1; border: 0; background: var(--bg-2); color: var(--fg); padding: 9px 6px; font: inherit; font-size: 13.5px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent-2); color: #fff; font-weight: 700; }
+.fgd-groups label.inline { margin: 6px 0; font-size: 14px; }
+
+/* 保存・設定のタブ */
+.menu-tabs { position: sticky; top: -6px; z-index: 2; display: flex; gap: 4px; margin: -4px -2px 10px; padding: 6px 2px 8px; background: var(--bg); overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); }
+.menu-tabs::-webkit-scrollbar { display: none; }
+.menu-tabs button { flex: 1 0 auto; border: 0; border-radius: 999px; padding: 8px 12px; background: var(--bg-2); color: var(--fg); font: inherit; font-size: 13.5px; white-space: nowrap; cursor: pointer; }
+.menu-tabs button.on { background: var(--accent-2); color: #fff; font-weight: 700; }
+.menu-pane { min-height: calc(86vh - 150px); }
+.menu-pane .sect-title:first-child { margin-top: 2px; }
+details.adv { margin-top: 12px; }
+details.adv summary { cursor: pointer; font-size: 13.5px; color: var(--fg-2); }

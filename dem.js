@@ -67,6 +67,22 @@ function demFetch(url) {
 }
 const demUrl = (src, z, x, y) => src.url.replace("{z}", z).replace("{x}", x).replace("{y}", y);
 
+/** ある地点の標高を標高タイルから読む（1m → 5m → 10m の順。一度読んだタイルは端末に残るのでオフラインでも使える） */
+const DEM_LABEL = { dem1a: "1m（DEM1A・標高タイル）", dem5a: "5m（DEM5A・標高タイル）", dem5b: "5m（DEM5B・標高タイル）", dem10: "10m（DEM10B・標高タイル）" };
+async function demElevationAt(lat, lon) {
+  for (const src of DEM_SOURCES) {
+    const z = src.max, n = 2 ** z;
+    const fx = ((lon + 180) / 360) * n, fy = ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n;
+    const x = Math.floor(fx), y = Math.floor(fy);
+    const hgt = await demFetch(demUrl(src, z, x, y));
+    if (!hgt) continue;
+    const i = Math.min(255, Math.floor((fx - x) * 256)), j = Math.min(255, Math.floor((fy - y) * 256));
+    const v = hgt[j * 256 + i];
+    if (!Number.isNaN(v)) return { value: Math.round(v * 100) / 100, src: DEM_LABEL[src.id] || src.id };
+  }
+  return null;
+}
+
 /** ある元データから、表示タイル (z,x,y) の範囲の標高を取り出す（元の解像度が粗ければ拡大して補間） */
 async function demFromSource(src, z, x, y) {
   const nz = Math.min(z, src.max);
