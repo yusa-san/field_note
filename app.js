@@ -1155,6 +1155,50 @@ function addMemoCenter() {
 /* ---------- メモ一覧 ---------- */
 let listState = { q: "", cat: "", sort: "new", view: "list" };
 let listRefresh = null;
+/** 軌跡の一覧（メモ一覧の下に置く）：表示・非表示と削除 */
+function trackListBox() {
+  const box = h("div", { class: "track-list" });
+  let tracks = [];
+  const render = () => {
+    box.replaceChildren(h("div", { class: "track-head" }, `軌跡${tracks.length ? `（${tracks.length}本）` : ""}`));
+    if (!tracks.length) { box.append(h("div", { class: "note", style: "margin-top:2px" }, "記録した軌跡はありません。地図の右の軌跡ボタンで記録を開始できます（GPS ロガーアプリの GPX も「保存・設定」→「読み込み」から取り込めます）。")); return; }
+    for (const t of tracks) {
+      const rec = S.track && S.track.id === t.id;
+      const shown = S.shownTracks.has(t.id) || rec;
+      const showBtn = h("button", { class: "chip" + (shown ? " on" : ""), type: "button" }, shown ? "表示中" : "表示");
+      showBtn.onclick = () => {
+        if (rec) return;
+        if (S.shownTracks.has(t.id)) {
+          S.map.removeLayer(S.shownTracks.get(t.id));
+          S.shownTracks.delete(t.id);
+        } else {
+          const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
+          S.shownTracks.set(t.id, line);
+          // メモをタップしたときと同じく、一覧を閉じて軌跡の範囲を見せる
+          if (t.points.length) { closeSheet(true); setFollow(false); S.map.fitBounds(line.getBounds(), { padding: [40, 40] }); return; }
+        }
+        render();
+      };
+      const delBtn = h("button", { class: "chip", type: "button" }, "削除");
+      delBtn.onclick = async () => {
+        if (rec) return toast("記録中の軌跡は削除できません");
+        if (!confirm(`「${t.name}」を削除しますか？`)) return;
+        await DB.del("tracks", t.id);
+        if (S.shownTracks.has(t.id)) S.map.removeLayer(S.shownTracks.get(t.id));
+        S.shownTracks.delete(t.id);
+        tracks = tracks.filter((x) => x !== t);
+        render();
+      };
+      box.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto;cursor:default" },
+        h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, [t.source === "gpx" ? "GPX" : "", fmtDate(t.startedAt), fmtDist(t.distance), `${t.points.length}点`].filter(Boolean).join("・"))),
+        showBtn, delBtn));
+    }
+  };
+  DB.all("tracks").then((ts) => { tracks = ts.sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1)); render(); });
+  render();
+  return box;
+}
+
 function openList() {
   const q = h("input", { type: "search", placeholder: "キーワードで絞り込み", value: listState.q });
   const cat = h("select", {});
@@ -1301,7 +1345,7 @@ function openList() {
 
   tabList.onclick = () => { listState.view = "list"; render(); };
   tabPhotos.onclick = () => { if (selecting) setSelecting(false); listState.view = "photos"; render(); };
-  const render = () => {
+  let render = () => {
     listState = { q: q.value.trim(), cat: cat.value, sort: sort.value, view: listState.view };
     tabList.classList.toggle("on", listState.view === "list");
     tabPhotos.classList.toggle("on", listState.view === "photos");
@@ -1366,7 +1410,12 @@ function openList() {
   cat.onchange = render;
   sort.onchange = render;
   listRefresh = () => { if (!selecting) render(); };
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, list, bar), {
+  // 軌跡はメモの一覧の下に（リスト表示で、選択モードでないときだけ）
+  const tracksBox = trackListBox();
+  const syncTracks = () => (tracksBox.hidden = listState.view === "photos" || selecting);
+  const render0 = render;
+  render = () => { render0(); syncTracks(); };
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
@@ -2107,44 +2156,9 @@ async function openMenu() {
   };
 
   const prefStatus = h("div", { class: "note" });
-  const trackList = h("div");
-  const renderTracks = () => {
-    trackList.replaceChildren();
-    if (!tracks.length) trackList.append(h("div", { class: "note" }, "記録した軌跡はありません。地図の右の軌跡ボタンで記録を開始できます。"));
-    for (const t of tracks) {
-      const shown = S.shownTracks.has(t.id) || (S.track && S.track.id === t.id);
-      const showBtn = h("button", { class: "chip" + (shown ? " on" : ""), type: "button" }, shown ? "表示中" : "表示");
-      showBtn.onclick = () => {
-        if (S.track && S.track.id === t.id) return;
-        if (S.shownTracks.has(t.id)) {
-          S.map.removeLayer(S.shownTracks.get(t.id));
-          S.shownTracks.delete(t.id);
-        } else {
-          const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
-          S.shownTracks.set(t.id, line);
-          if (t.points.length) S.map.fitBounds(line.getBounds(), { padding: [40, 40] });
-        }
-        renderTracks();
-      };
-      const delBtn = h("button", { class: "chip", type: "button" }, "削除");
-      delBtn.onclick = async () => {
-        if (S.track && S.track.id === t.id) return toast("記録中の軌跡は削除できません");
-        if (!confirm(`「${t.name}」を削除しますか？`)) return;
-        await DB.del("tracks", t.id);
-        if (S.shownTracks.has(t.id)) S.map.removeLayer(S.shownTracks.get(t.id));
-        S.shownTracks.delete(t.id);
-        tracks.splice(tracks.indexOf(t), 1);
-        renderTracks();
-      };
-      trackList.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto;cursor:default" },
-        h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, [t.source === "gpx" ? "GPX" : "", fmtDate(t.startedAt), fmtDist(t.distance), `${t.points.length}点`].filter(Boolean).join("・"))),
-        showBtn, delBtn));
-    }
-  };
-  renderTracks();
 
   const last = Settings.data.lastExportAt;
-  const TABS = [["save", "保存・印刷"], ["load", "読み込み"], ["track", "軌跡"], ["settings", "設定"]];
+  const TABS = [["save", "保存・印刷"], ["load", "読み込み"], ["settings", "設定"]];
   // 見出し付きのまとまり（カード）・長い説明は畳む
   const sec = (title, sub, ...kids) => h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, title), sub ? h("p", {}, sub) : null), ...kids);
   const sub = (t) => h("div", { class: "msec-sub" }, t);
@@ -2198,9 +2212,6 @@ async function openMenu() {
           h("button", { class: "btn secondary", type: "button", onclick: openEstatSheet }, "e-Stat 統計")),
         h("button", { class: "btn secondary block", type: "button", style: "margin-top:8px", onclick: openGreenSheet }, "東京都 緑のオープンデータ"),
         h("button", { class: "btn link block", type: "button", style: "margin-top:6px", onclick: openDataSheet }, "重ねたデータを管理する（表示・透明度・削除）"))),
-    track: h("div", {},
-      sec("記録した軌跡", "表示の切り替え・削除", trackList,
-        hint("記録は地図の右の軌跡ボタンで開始・終了します。画面を消すと記録が止まる端末では、GPS ロガーアプリで記録して GPX を「読み込み」タブから取り込んでください。"))),
     settings: h("div", {},
       sec("調査", "書き出すファイル名とメモに記録されます",
         h("label", {}, "調査名", proj),

@@ -575,3 +575,7 @@ details.hint p { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-2); line-he
 .msec.danger-zone h3 { color: #c62828; }
 .btn.link { background: none; border: 0; color: var(--accent-2); text-decoration: underline; padding: 6px; }
 @media (prefers-color-scheme: dark) { .msec-meta.warn-text { color: #ffb74d; } .msec.danger-zone h3 { color: #ef9a9a; } }
+
+/* メモ一覧の下の軌跡 */
+.track-list { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.track-head { font-size: 13px; font-weight: 700; color: var(--fg-2); margin-bottom: 4px; }
