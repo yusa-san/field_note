@@ -14,6 +14,8 @@
 const REINFO = "https://www.reinfolib.mlit.go.jp/ex-api/external/";
 const ESTAT = "https://api.e-stat.go.jp/rest/3.0/app/json/";
 
+const json = (o, status, cors) => new Response(JSON.stringify(o, null, 1), { status, headers: { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+
 export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
@@ -32,6 +34,24 @@ export default {
     if (!okOrigin) return new Response("forbidden origin", { status: 403, headers: cors });
 
     const url = new URL(request.url);
+    // 動作確認：設定の有無と、各 API に届くかを返す（API キーそのものは返さない）
+    if (url.pathname === "/health") {
+      const probe = async (u, h = {}) => {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(u, { headers: { ...h, "User-Agent": "fieldnote-proxy/1.0" }, signal: AbortSignal.timeout(20000) });
+          const text = (await r.text()).slice(0, 300);
+          return { status: r.status, ms: Date.now() - t0, body: text };
+        } catch (e) {
+          return { error: String(e && e.message || e), ms: Date.now() - t0 };
+        }
+      };
+      return json({
+        secrets: { REINFOLIB_KEY: !!env.REINFOLIB_KEY, ESTAT_APPID: !!env.ESTAT_APPID, ALLOWED_ORIGINS: env.ALLOWED_ORIGINS || "(未設定)" },
+        reinfolib: env.REINFOLIB_KEY ? await probe(REINFO + "XKT002?response_format=geojson&z=14&x=14549&y=6452", { "Ocp-Apim-Subscription-Key": env.REINFOLIB_KEY }) : "REINFOLIB_KEY 未設定",
+        estat: env.ESTAT_APPID ? await probe(ESTAT + "getStatsList?limit=1&appId=" + encodeURIComponent(env.ESTAT_APPID)) : "ESTAT_APPID 未設定",
+      }, 200, cors);
+    }
     let target, headers = {}, ttl;
     let m;
     if ((m = url.pathname.match(/^\/reinfolib\/(X[A-Z]{2}\d{3})$/))) {
@@ -56,10 +76,28 @@ export default {
     const cacheKey = new Request(url.toString(), { method: "GET" });
     let res = await cache.match(cacheKey);
     if (!res) {
-      const up = await fetch(target, { headers, cf: { cacheTtl: ttl, cacheEverything: true } });
-      res = new Response(up.body, up);
-      res.headers.set("Cache-Control", up.ok ? `public, max-age=${ttl}` : "no-store");
-      if (up.ok) ctx.waitUntil(cache.put(cacheKey, res.clone()));
+      let up;
+      try {
+        // 応答がないまま待ち続けないよう 25 秒で打ち切る。User-Agent は明示する（付けないと拒否するサーバがある）
+        up = await fetch(target, {
+          headers: { ...headers, "User-Agent": "fieldnote-proxy/1.0 (+https://github.com/yusa-san/field_note)", Accept: "application/json, */*" },
+          signal: AbortSignal.timeout(25000),
+          cf: { cacheTtl: ttl, cacheEverything: true },
+        });
+      } catch (e) {
+        return json({ error: "upstream fetch failed", api: m[1], message: String(e && e.message || e) }, 502, cors);
+      }
+      // e-Stat はエラーでも HTTP 200 で返すので、中身を見てエラーはキャッシュしない
+      let ok = up.ok, body = up.body;
+      if (url.pathname.startsWith("/estat/")) {
+        const text = await up.text();
+        const st = Number((text.match(/"STATUS"\s*:\s*"?(\d+)/) || [])[1] ?? 0);
+        if (st >= 100) ok = false;
+        body = text;
+      }
+      res = new Response(body, up);
+      res.headers.set("Cache-Control", ok ? `public, max-age=${ttl}` : "no-store");
+      if (ok) ctx.waitUntil(cache.put(cacheKey, res.clone()).catch(() => {}));
     }
     const out = new Response(res.body, res);
     for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
