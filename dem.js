@@ -69,8 +69,9 @@ const demUrl = (src, z, x, y) => src.url.replace("{z}", z).replace("{x}", x).rep
 
 /** ある地点の標高を標高タイルから読む（1m → 5m → 10m の順。一度読んだタイルは端末に残るのでオフラインでも使える） */
 const DEM_LABEL = { dem1a: "1m（DEM1A・標高タイル）", dem5a: "5m（DEM5A・標高タイル）", dem5b: "5m（DEM5B・標高タイル）", dem10: "10m（DEM10B・標高タイル）" };
-async function demElevationAt(lat, lon) {
+async function demElevationAt(lat, lon, skip1m = false) {
   for (const src of DEM_SOURCES) {
+    if (skip1m && src.id === "dem1a") continue;
     const z = src.max, n = 2 ** z;
     const fx = ((lon + 180) / 360) * n, fy = ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n;
     const x = Math.floor(fx), y = Math.floor(fy);

@@ -727,6 +727,9 @@ function openLayers() {
     ovs.append(h("div", { class: "ov-row" }, cb, h("div", {}, def.name, h("small", {}, def.desc + (def.min ? `（ズーム${def.min}〜）` : ""))), rg));
   }
   const body = h("div", {},
+    h("div", { class: "menu-grid", style: "margin:4px 0 2px" },
+      h("button", { type: "button", class: "btn secondary", onclick: openCompareSheet }, CMP.on ? "比較を変える" : "2 つの地図を比べる"),
+      h("button", { type: "button", class: "btn secondary", onclick: () => openExtraLayers() }, "その他のレイヤ")),
     h("div", { class: "sect-title" }, "ベース地図：地理院 Vector"), vtRow,
     h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
@@ -1189,9 +1192,9 @@ function trackListBox() {
         tracks = tracks.filter((x) => x !== t);
         render();
       };
-      box.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto;cursor:default" },
+      box.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto auto;cursor:default" },
         h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, [t.source === "gpx" ? "GPX" : "", fmtDate(t.startedAt), fmtDist(t.distance), `${t.points.length}点`].filter(Boolean).join("・"))),
-        showBtn, delBtn));
+        h("button", { class: "chip", type: "button", onclick: () => { closeSheet(true); elevationProfile(trackLatLngs(t).flat(), t.name); } }, "断面"), showBtn, delBtn));
     }
   };
   DB.all("tracks").then((ts) => { tracks = ts.sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1)); render(); });
@@ -2203,6 +2206,7 @@ async function openMenu() {
         h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ファイルを選ぶ"), fileIn,
         hint("同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。")),
       sec("地点をまとめて入力", "「緯度, 経度, 名称」を 1 行ずつ貼り付けてメモにする", bulkPointsBox()),
+      sec("写真をまとめて読み込む", "撮影位置（位置情報）付きの写真から、その場所に写真メモを作る", exifImportBox()),
       sec("地図に重ねる", "メモにはせず、地図の上に表示だけする",
         sub("ファイルから"),
         h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報"),
@@ -2529,6 +2533,7 @@ function bindUI() {
     updateMeasure();
   };
   $("#btn-track").onclick = toggleTrack;
+  $("#measure-prof").onclick = () => { if (!S.measure || S.measure.pts.length < 2) return toast("2 点以上を置くと断面図を描けます"); elevationProfile(S.measure.pts, "計測した線"); };
   $("#btn-crosshair").onclick = () => toggleCrosshair();
   $("#btn-locate").onclick = () => {
     startOrientation();
@@ -2576,6 +2581,7 @@ async function main() {
   moveToFirstFix = initMap();
   demRestore();
   dataRestore();
+  startSun();
   try {
     await resumeTrackIfAny();
     await loadMemos();
