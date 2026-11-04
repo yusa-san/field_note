@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rebuild_green:
+        description: "東京都 緑のオープンデータを作り直す（データが更新されたとき）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,10 +29,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # 東京都 緑のオープンデータ → PMTiles（時間がかかるのでキャッシュし、定義が変わったときか手動指定のときだけ作り直す）
+      - name: Cache green tiles
+        id: green-cache
+        uses: actions/cache@v4
+        with:
+          path: green/tokyo_green.pmtiles
+          key: green-${{ hashFiles('tools/green_layers.tsv', 'tools/build_green.py') }}-${{ inputs.rebuild_green && github.run_id || 'v1' }}
+      - name: Build green tiles
+        if: steps.green-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gdal-bin tippecanoe
+          mkdir -p green
+          python3 tools/build_green.py --work "$RUNNER_TEMP/green" --out green/tokyo_green.pmtiles
+          rm -rf "$RUNNER_TEMP/green"
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html style.css vector.js dem.js georef.js memo-tools.js asr-worker.js app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
+          cp index.html style.css vector.js dem.js reinfo-catalog.js datalayers.js importlayers.js georef.js print.js memo-tools.js asr-worker.js app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
+          mkdir -p _site/data
+          cp green/tokyo_green.pmtiles _site/data/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
