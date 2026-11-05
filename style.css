@@ -709,3 +709,16 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #v-jump .vj-row { display: grid; grid-template-columns: 6.5em 1fr 3.5em auto; align-items: center; gap: 8px; font-size: 14px; margin: 0; color: #fff; }
 #v-jump .vj-row input { width: 100%; font: inherit; font-size: 16px; padding: 7px 10px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .3); background: rgba(255, 255, 255, .08); color: #fff; }
 #v-jump .vj-unit { font-size: 13px; opacity: .8; }
+/* 再生モード（最初から・お気に入りだけ・自動再生）。シンプルな線のアイコン */
+.v-mode { display: inline-flex; align-items: center; gap: 2px; padding: 3px 4px 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, .12); }
+.v-mode-lab { font-size: 11.5px; opacity: .8; margin-right: 4px; white-space: nowrap; }
+.v-ico { width: 38px; height: 34px; border: 0; border-radius: 999px; background: transparent; color: #fff; display: grid; place-items: center; cursor: pointer; padding: 0; }
+.v-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v-ico:disabled { opacity: .35; cursor: default; }
+.v-ico.on { background: #f5b301; color: #1b1b1b; }
+#v-favonly.on svg { fill: currentColor; }
+#v-play .i-pause { display: none; }
+#v-play.on .i-play { display: none; }
+#v-play.on .i-pause { display: block; }
+.photo-pins-seg { align-items: stretch; flex: 1; }
+.photo-pins-seg .seg-lab { display: flex; align-items: center; padding: 0 10px; font-size: 12.5px; color: var(--fg-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }
