@@ -1,8 +1,10 @@
 /* フィールドノート Service Worker
- * - アプリ本体: ネットワーク優先（更新をすぐ反映）、オフライン時はキャッシュ
+ * - アプリ本体: ネットワーク優先（更新をすぐ反映）、オフライン時はキャッシュ。
+ *   GitHub Pages はファイルを 10 分間ブラウザに残させる（Cache-Control: max-age=600）ので、
+ *   ふつうに取るとリロードしても古い app.js が出る。必ずサーバーに確かめる（no-cache：変わっていなければ 304 で軽い）
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v28";
+const VERSION = "v30";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの
@@ -19,7 +21,7 @@ const TILE_HOSTS = ["cyberjapandata.gsi.go.jp", "disaportaldata.gsi.go.jp", "til
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(SHELL).then((c) => Promise.all(SHELL_FILES.map((u) => c.add(new Request(u, { mode: u.startsWith("http") && !u.includes("muni.js") ? "cors" : "no-cors" })).catch(() => {}))))
+    caches.open(SHELL).then((c) => Promise.all(SHELL_FILES.map((u) => c.add(new Request(u, { mode: u.startsWith("http") && !u.includes("muni.js") ? "cors" : "no-cors", cache: u.startsWith("http") ? "default" : "no-cache" })).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });
@@ -63,7 +65,8 @@ async function tileResponse(req) {
 
 async function shellResponse(req) {
   try {
-    const res = await fetch(req);
+    // 画面の読み込み（navigate）の Request には設定を足せないので、URL から作り直す
+    const res = await fetch(req.mode === "navigate" ? new Request(req.url, { cache: "no-cache", credentials: "same-origin" }) : new Request(req, { cache: "no-cache" }));
     if (res.ok) (await caches.open(SHELL)).put(req, res.clone());
     return res;
   } catch {

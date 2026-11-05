@@ -733,3 +733,19 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 @media (max-width: 360px) { .seg.seg-opt .seg-lab { padding: 0 6px; font-size: 11px; } .seg.seg-opt button { font-size: 11.5px; } }
 .opt-rows .seg.seg-opt .seg-lab { flex: 0 0 9.4em; justify-content: center; }
 .opt-rows.list-opt { margin: 6px 0 4px; }
+
+/* 時間のかかる処理（ZIP の読み込みなど）の進み具合：ほかの操作はできないようにする */
+#busy { position: fixed; inset: 0; z-index: 4000; background: rgba(0, 0, 0, .5); display: flex; align-items: center; justify-content: center; padding: 16px; touch-action: none; }
+#busy .busy-card { width: min(420px, 100%); background: var(--bg); color: var(--fg); border-radius: 16px; padding: 18px 18px 14px; box-shadow: var(--shadow); }
+#busy .busy-title { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; margin-bottom: 14px; }
+#busy .busy-spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: busy-spin .9s linear infinite; }
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+#busy .busy-bar { position: relative; height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+#busy .busy-bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s; }
+#busy .busy-bar.indet i { width: 35%; animation: busy-indet 1.2s ease-in-out infinite; }
+@keyframes busy-indet { from { left: -35%; } to { left: 100%; } }
+#busy .busy-row { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--fg-2); }
+#busy .busy-pct { color: var(--fg); font-variant-numeric: tabular-nums; }
+#busy .busy-text { font-variant-numeric: tabular-nums; }
+#busy .busy-warn { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: #fff4e5; color: #8a4b00; font-size: 13px; line-height: 1.55; }
+@media (prefers-color-scheme: dark) { #busy .busy-warn { background: #3a2a12; color: #ffcf8a; } }

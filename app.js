@@ -88,6 +88,54 @@ function toast(msg, ms = 2400) {
   toastTimer = setTimeout(() => (t.hidden = true), ms);
 }
 
+/**
+ * 時間のかかる処理（ZIP の読み込みなど）の間、ほかの操作をできなくして進み具合を出す画面
+ * busyOpen(題名) → { set(割合 0〜1 または null（不明）, 文), close() }。
+ * 開いている間は画面が消えないようにし（Wake Lock）、ページを閉じようとしたら確かめる
+ */
+const BUSY = { el: null, wake: null };
+function busyOpen(title, warn = "終わるまで、この画面を閉じたり、ほかのアプリに切り替えたり、画面を消したりしないでください。") {
+  busyClose();
+  const bar = h("i"), text = h("div", { class: "busy-text" }, "準備中…"), pct = h("b", { class: "busy-pct" });
+  BUSY.el = h("div", { id: "busy", role: "alertdialog", "aria-modal": "true", "aria-label": title },
+    h("div", { class: "busy-card" },
+      h("div", { class: "busy-title" }, h("span", { class: "busy-spin" }), title),
+      h("div", { class: "busy-bar indet" }, bar),
+      h("div", { class: "busy-row" }, text, pct),
+      h("p", { class: "busy-warn" }, warn)));
+  document.body.append(BUSY.el);
+  document.activeElement?.blur?.();
+  const lock = async () => { try { if ("wakeLock" in navigator && !BUSY.wake && BUSY.el) BUSY.wake = await navigator.wakeLock.request("screen"); BUSY.wake?.addEventListener?.("release", () => { BUSY.wake = null; }); } catch {} };
+  BUSY.lock = lock;
+  lock();
+  let last = 0;
+  return {
+    set(frac, msg) {
+      if (!BUSY.el) return;
+      const now = performance.now();
+      if (msg != null && (now - last > 80 || frac === 1)) text.textContent = msg; // 書き換えすぎない
+      if (frac == null) { bar.parentNode.classList.add("indet"); bar.style.width = ""; pct.textContent = ""; return; }
+      if (now - last < 80 && frac !== 1) return;
+      last = now;
+      bar.parentNode.classList.remove("indet");
+      const v = Math.max(0, Math.min(1, frac));
+      bar.style.width = `${(v * 100).toFixed(1)}%`;
+      pct.textContent = `${Math.floor(v * 100)}%`;
+    },
+    close: busyClose,
+  };
+}
+function busyClose() {
+  BUSY.el?.remove();
+  BUSY.el = null;
+  try { BUSY.wake?.release(); } catch {}
+  BUSY.wake = null;
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && BUSY.el) BUSY.lock?.(); });
+window.addEventListener("beforeunload", (e) => { if (BUSY.el) { e.preventDefault(); e.returnValue = ""; } });
+/** 画面を描き直す間をあける（長い処理の途中で進み具合を見せる・メモリを片付けさせる） */
+const breathe = () => new Promise((r) => setTimeout(r, 0));
+
 function fmtLatLon(lat, lon, d = 6) {
   return `${lat.toFixed(d)}, ${lon.toFixed(d)}`;
 }
@@ -1345,6 +1393,7 @@ function openList() {
   const selBtn = h("button", { type: "button", class: "chip sel-toggle" }, "選択して整理");
   let allPhotos = null;
   DB.all("photos").then((ps) => {
+    ps = ps.filter((p) => S.memos.has(p.memoId)); // メモのない写真（取り込みの途中で止まったものなど）は数えない
     allPhotos = ps;
     tabPhotos.textContent = `写真（${ps.length}）`;
     if (listState.view === "photos") render();
@@ -2132,25 +2181,36 @@ async function importGPX(text, filename = "") {
 
 async function importZip(file) {
   let z, data, base;
+  const busy = busyOpen("ZIP を開いています");
+  busy.set(null, `${file.name || "ZIP"}（${fmtMB(file.size)}）を読んでいます…`);
   try {
     z = await readZip(file);
     const names = z.names.filter((n) => !n.startsWith("__MACOSX/"));
     const jsonName = names.find((n) => /(^|\/)data\.json$/.test(n)) || names.find((n) => n.endsWith(".json"));
-    if (!jsonName) return alert("ZIP の中に data.json が見つかりません");
+    if (!jsonName) { busyClose(); return alert("ZIP の中に data.json が見つかりません"); }
     base = jsonName.slice(0, jsonName.lastIndexOf("/") + 1);
     data = JSON.parse(await (await z.get(jsonName)).text());
   } catch (e) {
+    busyClose();
     return alert("ZIP を読み込めませんでした：" + e.message);
   }
-  toast("ZIP を読み込み中…", 60000);
+  busyClose();
+  // 端末の空きが足りないと途中で止まるので、先に確かめる（写真は ZIP とほぼ同じ大きさ＋サムネイル）
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est && est.quota) {
+      const free = est.quota - (est.usage || 0), need = file.size * 1.15;
+      if (free < need && !confirm(`端末の空き（このアプリが使える分）が足りないかもしれません。\n必要：約 ${fmtMB(need)}／空き：約 ${fmtMB(free)}\n途中で止まったときは、空きを作ってから同じ ZIP をもう一度読み込めば続きから入ります。続けますか？`)) return;
+    }
+  } catch {}
   return importData(data, async (p) => {
     const path = p.file || (p.filename ? `photos/${p.filename}` : null);
     if (!path) return null;
     const b = await z.get(base + path);
     return b ? new Blob([b], { type: p.mime || (/\.png$/i.test(path) ? "image/png" : /\.webp$/i.test(path) ? "image/webp" : "image/jpeg") }) : null;
-  });
+  }, "ZIP");
 }
-async function importData(data, getPhotoBlob) {
+async function importData(data, getPhotoBlob, kind = "ファイル") {
   let memos = data.memos;
   // GeoJSON（このアプリが書き出したもの）も受け付ける
   if (!memos && data.type === "FeatureCollection") {
@@ -2164,16 +2224,39 @@ async function importData(data, getPhotoBlob) {
   const choice = await chooseImportMode({ ...data, memos }, importFileName);
   if (!choice) return;
   const asOther = choice.mode === "add", owner = choice.owner;
-  let added = 0, updated = 0, skipped = 0, photos = 0;
+  const busy = busyOpen(`${kind}を読み込んでいます`, "読み込みが終わるまで、この画面を閉じたり、ほかのアプリに切り替えたり、画面を消したりしないでください。途中で止まったときは、同じファイルをもう一度読み込めば続きから入ります（入ったメモは二重になりません）。");
+  try {
+    return await importDataRun(data, memos, getPhotoBlob, asOther, owner, busy);
+  } catch (e) {
+    busyClose();
+    await loadMemos().catch(() => {});
+    alert(`読み込みが途中で止まりました：${e?.message || e}\n入ったところまでは残っています。同じファイルをもう一度読み込むと続きから入ります。`);
+  } finally {
+    busyClose();
+  }
+}
+async function importDataRun(data, memos, getPhotoBlob, asOther, owner, busy) {
+  let added = 0, updated = 0, skipped = 0, photos = 0, failed = 0;
+  // 進み具合：メモ 1 件・写真 1 枚・録音 1 件をそれぞれ 1 として数える（写真は重いので 4）
+  const W_PH = 4;
+  const total = Math.max(1, memos.reduce((t, r) => t + 1 + W_PH * (Array.isArray(r.photos) ? r.photos.length : 0) + (Array.isArray(r.audios) ? r.audios.length : 0), 0));
+  const nPh = memos.reduce((t, r) => t + (Array.isArray(r.photos) ? r.photos.length : 0), 0);
+  let done = 0, phDone = 0, mi = 0;
+  const step = () => busy.set(0.97 * done / total, `メモ ${mi} / ${memos.length} 件${nPh ? `・写真 ${phDone} / ${nPh} 枚` : ""}`);
+  step();
   let no = nextNo();
   const already = new Set([...S.memos.values()].filter((x) => x.owner === owner && x.srcId).map((x) => x.srcId));
   for (const raw of memos) {
-    if (typeof raw.lat !== "number" || typeof raw.lon !== "number") { skipped++; continue; }
+    mi++;
+    const nAll = 1 + W_PH * (Array.isArray(raw.photos) ? raw.photos.length : 0) + (Array.isArray(raw.audios) ? raw.audios.length : 0);
+    const doneTo = done + nAll; // このメモが終わったときの値（飛ばしたときもここまで進める）
+    if (typeof raw.lat !== "number" || typeof raw.lon !== "number") { skipped++; done = doneTo; phDone += raw.photos?.length || 0; step(); continue; }
     const { photos: ph, audios: au, ...m } = raw;
+    const skipMemo = () => { skipped++; done = doneTo; phDone += ph?.length || 0; step(); };
     if (asOther) {
       // 新しいメモとして追加（元の ID は srcId に残し、同じファイルの二重取り込みを防ぐ）
       const src = m.srcId || m.id || null;
-      if (src && already.has(src)) { skipped++; continue; }
+      if (src && already.has(src)) { skipMemo(); if (mi % 50 === 0) await breathe(); continue; }
       m.srcId = src;
       m.id = uuid();
       m.owner = m.owner || owner;
@@ -2183,7 +2266,7 @@ async function importData(data, getPhotoBlob) {
     m.createdAt = m.createdAt || nowIso();
     m.updatedAt = m.updatedAt || m.createdAt;
     const cur = asOther ? null : S.memos.get(m.id);
-    if (cur && (cur.updatedAt || "") >= m.updatedAt) { skipped++; continue; }
+    if (cur && (cur.updatedAt || "") >= m.updatedAt) { skipMemo(); if (mi % 50 === 0) await breathe(); continue; }
     if (!cur && [...S.memos.values()].some((x) => x.no === m.no)) m.no = no++;
     if (m.no == null) m.no = no++;
     let cnt = cur ? cur.photoCount || 0 : 0;
@@ -2196,7 +2279,9 @@ async function importData(data, getPhotoBlob) {
           const pr = await processPhoto(new File([blob], p.filename || "photo.jpg", { type: blob.type || p.mime || "image/jpeg" }), "original");
           await DB.put("photos", { id: (!asOther && p.id) || uuid(), memoId: m.id, order: i, ...pr, takenAt: p.takenAt || pr.takenAt, origName: p.origName || pr.origName });
           photos++;
-        } catch {}
+        } catch { failed++; }
+        done += W_PH; phDone++; step();
+        if (phDone % 8 === 0) await breathe();
       }
       cnt = (await DB.byIndex("photos", "memoId", m.id)).length;
     }
@@ -2208,12 +2293,15 @@ async function importData(data, getPhotoBlob) {
           if (!blob) continue;
           await DB.put("audios", { id: (!asOther && a.id) || uuid(), memoId: m.id, blob: new Blob([blob], { type: a.mime || blob.type }), mime: a.mime || blob.type, duration: a.duration || 0, createdAt: a.createdAt || m.createdAt });
         } catch {}
+        done++; step();
       }
       m.audioCount = (await DB.byIndex("audios", "memoId", m.id)).length;
     }
     await DB.put("memos", m);
     cur ? updated++ : added++;
+    done = doneTo; step();
   }
+  busy.set(0.97, "軌跡・重ねた地図を読み込んでいます…");
   let tAdded = 0;
   if (Array.isArray(data.tracks)) {
     for (const t of data.tracks) {
@@ -2241,9 +2329,24 @@ async function importData(data, getPhotoBlob) {
     Settings.save();
   }
   const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
+  busy.set(0.99, "地図に並べています…");
+  await breathe();
+  const orphans = await removeOrphanMedia(); // 前に途中で止まったときに残った、メモのない写真・録音
   await loadMemos();
   if (typeof dataLegendUpdate === "function") dataLegendUpdate();
-  alert(`読み込み完了${asOther ? `（${owner} さんのデータとして追加）` : ""}\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped}${asOther ? "（取り込み済み）" : ""} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}`);
+  busy.set(1, "読み込みました");
+  busyClose();
+  alert(`読み込み完了${asOther ? `（${owner} さんのデータとして追加）` : ""}\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped}${asOther ? "（取り込み済み）" : ""} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}${failed ? `\n読み込めなかった写真 ${failed} 枚（壊れているか、端末の空きが足りない可能性があります）` : ""}${orphans ? `\nメモのない写真・録音 ${orphans} 件を片付けました` : ""}`);
+}
+
+/** メモのない写真・録音（読み込みが途中で止まったときなどに残る。どこにも出ず容量だけ使う）を消す */
+async function removeOrphanMedia() {
+  const ids = new Set((await DB.all("memos")).map((m) => m.id));
+  let n = 0;
+  for (const st of ["photos", "audios"]) {
+    for (const x of await DB.all(st)) if (x.memoId && !ids.has(x.memoId)) { await DB.del(st, x.id); n++; }
+  }
+  return n;
 }
 
 /* ====================================================================
