@@ -773,12 +773,124 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #guide .guide-top { display: flex; align-items: center; justify-content: space-between; }
 #guide .guide-step { font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
 #guide .guide-skip { border: 0; background: none; color: var(--fg-2); font-size: 13px; padding: 4px 2px; cursor: pointer; text-decoration: underline; }
-#guide h3 { margin: 4px 0 6px; font-size: 17px; }
+#guide h3 { margin: 0 0 8px; font-size: 17px; }
 #guide p { margin: 0; font-size: 14px; line-height: 1.65; }
 #guide .guide-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 #guide .guide-foot .btn { padding: 9px 14px; font-size: 14px; }
 #guide .guide-foot .btn:disabled { opacity: .45; }
-#guide .guide-dots { display: flex; gap: 5px; }
-#guide .guide-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
-#guide .guide-dots i.on { background: var(--accent); }
+#guide .guide-prog { height: 3px; border-radius: 2px; background: var(--line); margin: 6px 0 10px; overflow: hidden; }
+#guide .guide-prog i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+#guide .guide-note { margin-top: 8px; font-size: 12.5px; color: var(--fg-2); }
+#guide .guide-foot { justify-content: flex-end; }
 .fab.fab-lang.ja { font-size: 11.5px; letter-spacing: 0; }
+
+/* ====================================================================
+ * 文字組み（BIZ UDPゴシックは行の高さが詰まるので、行間をはっきり決める）
+ * - 本文 1.6・小さい説明 1.55・見出し 1.35・ボタン 1.3
+ * - 見出しと本文の間は、本文の行間より広く
+ * - 日本語は文節の切れ目で折り返す（word-break: auto-phrase。対応していないブラウザはふつうの折り返し）。
+ *   短い文の最後に 1〜2 文字だけ残らないように（text-wrap: pretty / balance）
+ * ==================================================================== */
+html, body { line-height: 1.6; }
+html:lang(ja) body { word-break: auto-phrase; line-break: strict; }
+h1, h2, h3, h4, .sheet-head h2 { line-height: 1.35; text-wrap: balance; }
+p, li, small, .note, .hint p, .msec-h p, .msec-meta, .warn, label, summary, .pin-msg, .pr-info, .busy-warn, #guide p { text-wrap: pretty; }
+button, .btn, .chip, select, .seg button, .seg-lab { line-height: 1.3; }
+.btn, .chip, .seg button { text-wrap: balance; }
+form label, form .lbl, #sheet-body label { line-height: 1.5; }
+form label.inline, #sheet-body label.inline { line-height: 1.55; align-items: flex-start; }
+form label.inline input[type=checkbox], #sheet-body label.inline input[type=checkbox] { flex: none; margin-top: 1px; }
+.msec-h h3 { margin: 0 0 6px; }
+.msec-h p { margin: 0 0 12px; line-height: 1.55; }
+.msec-h:last-child p:last-child { margin-bottom: 0; }
+.xlab b { line-height: 1.35; }
+.xlab small { margin-top: 4px; line-height: 1.45; }
+.msec-meta { line-height: 1.65; }
+.stat b { line-height: 1.25; }
+.stat small { display: block; margin-top: 2px; line-height: 1.4; }
+.note { line-height: 1.65; }
+details.hint p, .hint p { line-height: 1.7; }
+.leaflet-popup-content { line-height: 1.55; }
+.leaflet-popup-content .pt { line-height: 1.4; margin-bottom: 2px; }
+.leaflet-popup-content .ps { line-height: 1.5; margin-bottom: 4px; }
+#status { line-height: 1.5; }
+.sheet-head { padding-top: 8px; padding-bottom: 6px; }
+
+/* ====================================================================
+ * 大きさの違う端末でも崩れないように（幅 320 px 〜 PC）
+ * - ボタンの文字は折り返さない（1 行）。並びは、狭い端末では文字・余白を少し小さくして 1 行に収める
+ * - 全幅のボタン（.btn.block）だけは、長い文言のとき 2 行になってよい
+ * ==================================================================== */
+.btn, .chip, .seg button, .v-btn, .menu-tabs button, label.btn, .pb-cat, .leaflet-popup-content .pa button, .leaflet-popup-content .pa a { white-space: nowrap; }
+.btn.block { white-space: normal; }
+/* 下のバー：ラベルは 1 行。未保存の印はアイコンの右上に重ねる */
+.bb { position: relative; min-width: 0; }
+.bb span { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: clamp(9.5px, 3vw, 12px); }
+#unsaved-badge { position: absolute; top: 3px; left: calc(50% + 7px); margin: 0; line-height: 15px; }
+/* ピンのポップアップの操作：1 行 */
+.leaflet-popup-content .pa { flex-wrap: nowrap; }
+.leaflet-popup-content .pa button, .leaflet-popup-content .pa a { flex: 1 1 auto; text-align: center; padding: 5px 7px; font-size: 12px; }
+/* メモの入力：下のボタン・写真の追加 */
+.form-actions { flex-wrap: nowrap; }
+.form-actions .btn { white-space: nowrap; }
+.photo-btns .file-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.voice-row > button, .voice-row > .btn { flex: none; white-space: nowrap; }
+.voice-row > select { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+/* ボタンを 2 つ並べる箱：狭いときは 1 列に（ボタンの文字は折り返さない） */
+.menu-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.menu-grid .btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 書き出しの行（形式名と保存・共有）：説明が長くてもボタンは右に 1 行 */
+.xbtn { display: flex; gap: 6px; flex: none; }
+.xbtn .btn { padding: 9px 13px; }
+/* シートの見出し */
+.sheet-head h2 { min-width: 0; overflow-wrap: anywhere; }
+.icon-btn { flex: none; }
+
+@media (max-width: 479px) {
+  /* 写真を見る画面：拡大縮小は右端に縦に並べ、下の列は 1 行に */
+  .v-bottom { gap: 6px; padding-left: 8px; padding-right: 8px; }
+  .v-btn { min-width: 38px; height: 38px; }
+  .v-btn.wide { padding: 0 11px; font-size: 13.5px; }
+  #v-count { padding: 6px 9px; min-width: 52px; }
+  #viewer:not(.playback) #v-zin, #viewer:not(.playback) #v-zoom, #viewer:not(.playback) #v-zout { position: absolute; right: 10px; }
+  #viewer:not(.playback) #v-zin { bottom: calc(100% + 92px); }
+  #viewer:not(.playback) #v-zoom { bottom: calc(100% + 56px); width: 38px; min-width: 0; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
+  #viewer:not(.playback) #v-zout { bottom: calc(100% + 8px); }
+  /* 見返す：1 段目にお気に入り、2 段目に再生モード（いつも同じ 2 段） */
+  .v-pb-act { flex-wrap: wrap; row-gap: 8px; }
+  .v-pb-act .v-spacer { display: none; }
+  .v-pb-act .v-mode { flex: 1 0 100%; }
+  .v-mode-lab { margin-right: auto; }
+  /* メモの入力の下のボタン */
+  .form-actions .btn { padding: 11px 12px; font-size: 14px; }
+  .form-actions .primary { min-width: 84px; }
+  .photo-btns .file-btn { font-size: 13.5px !important; padding: 11px 6px; }
+  /* 書き出しの行 */
+  .xbtn .btn { padding: 8px 11px; font-size: 14px; }
+  .xrow { gap: 8px; }
+}
+@media (max-width: 359px) {
+  #sheet-body { padding-left: 10px; padding-right: 10px; }
+  .msec { padding: 10px 10px 12px; }
+  .chip { padding: 5px 9px; font-size: 12.5px; }
+  .seg button { font-size: 12.5px; }
+  .seg.seg-opt .seg-lab { padding: 0 5px; font-size: 10.5px; }
+  .opt-rows .seg.seg-opt .seg-lab { flex-basis: 8.6em; }
+  .seg.seg-opt button { font-size: 11px; }
+  .leaflet-popup-content .pa button, .leaflet-popup-content .pa a { padding: 5px 5px; font-size: 11.5px; }
+}
+/* タブレット・PC：シートは読みやすい幅で中央に（既定の最大 640 px のまま）、地図のボタンは少し大きく */
+@media (min-width: 768px) {
+  .fab { width: 48px; height: 48px; }
+  #bottombar { left: 50%; right: auto; transform: translateX(-50%); width: min(640px, 100%); border-radius: 16px 16px 0 0; }
+}
+/* 右のボタンの列：画面の高さが低い端末では小さく。横向きなど、さらに低いときは 2 列に */
+@media (max-height: 760px) { #fabs-right { gap: 6px; } .fab { width: 42px; height: 42px; border-radius: 11px; } .fab svg { width: 22px; height: 22px; } }
+@media (max-height: 640px) { #fabs-right { gap: 5px; } .fab { width: 38px; height: 38px; border-radius: 10px; } .fab svg { width: 20px; height: 20px; } .fab.fab-lang { font-size: 12px; } .fab.fab-lang.ja { font-size: 10px; } }
+@media (max-height: 540px) {
+  #fabs-right { display: grid; grid-auto-flow: column; grid-template-rows: repeat(auto-fill, 38px); direction: rtl; max-height: calc(100dvh - var(--safe-top) - var(--bb-h) - var(--safe-bottom) - 24px); }
+  #fabs-right .fab { direction: ltr; }
+}
+/* 使い方の案内：説明が長くて入らないときは、カードの中で送る */
+#guide .guide-card { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); }
+#guide .guide-card > p { overflow-y: auto; min-height: 0; flex: 0 1 auto; }
