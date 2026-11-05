@@ -26,7 +26,7 @@ const JA_RE = /[\u3040-\u30fa\u30fc-\u30ff\u3400-\u9fff\uff66-\uff9f々〆]/; //
 /** 数のあとの単位（辞書で訳しきれずに残ったもの） */
 const I18N_UNITS = [
   [/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/g, "$1-$2-$3"], [/(\d{4})\s*年\s*(\d{1,2})\s*月/g, "$1-$2"],
-  [/(\d)\s*件/g, "$1"], [/(\d)\s*枚/g, "$1 photos"], [/(\d)\s*本/g, "$1"], [/(\d)\s*点/g, "$1 pts"], [/(\d)\s*個/g, "$1"],
+  [/(\d)\s*件/g, "$1"], [/(\d)\s*枚/g, "$1"], [/(\d)\s*本/g, "$1"], [/(\d)\s*点/g, "$1 pts"], [/(\d)\s*個/g, "$1"],
   [/(\d)\s*か所/g, "$1 places"], [/(\d)\s*箇所/g, "$1 places"], [/(\d)\s*時間/g, "$1 h"], [/(\d)\s*分/g, "$1 min"], [/(\d)\s*秒/g, "$1 s"],
   [/(\d)\s*日/g, "$1 d"], [/(\d)\s*か月/g, "$1 mo"], [/(\d)\s*年/g, "$1"], [/(\d)\s*倍/g, "$1×"], [/(\d)\s*回/g, "$1×"], [/(\d)\s*段階/g, "$1 levels"],
 ];
@@ -68,13 +68,21 @@ function tr(s) {
       keep.push(t ?? inner);
       return `${keep.length - 1}`;
     });
-    let body = i18nFull(masked);
+    // まず文全体で（辞書に文のまま入っているもの）、だめなら「」の中を残して
+    let body = i18nFull(s);
+    if (body == null && masked !== s) body = i18nFull(masked);
+    if (body == null && s.includes("　")) {
+      // 「標高 41 m　メッシュ …　（住所）」のように全角の空白で区切った並びは、区切りごとに訳す（住所などの区切りは日本語のまま）
+      const parts = s.split("　");
+      if (parts.length > 1) { const t = parts.map((x) => tr(x)); if (t.some((x, i) => x !== parts[i])) body = t.join(" · "); }
+    }
     if (body == null) out = s;
     else {
       const lead = s.match(/^\s*/)[0], tail = s.match(/\s*$/)[0];
       for (const [re, to] of I18N_PUNCT) body = body.replace(re, to);
       body = body.replace(/(\d+)/g, (_, i) => `“${keep[Number(i)]}”`);
-      body = body.replace(/ {2,}/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")").replace(/ ([,.:;!?])/g, "$1").replace(/\) ([,.:)])/g, ")$1").trim();
+      body = body.replace(/([a-z])(\d)/g, "$1 $2").replace(/([A-Za-z0-9])\(/g, "$1 (") // 「写真1」→「Photos 1」、「なし（…）」→「None (…)」
+        .replace(/ {2,}/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")").replace(/ ([,.:;!?])/g, "$1").replace(/\) ([,.:)])/g, ")$1").trim();
       out = lead + body + tail;
     }
   }

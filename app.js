@@ -2754,11 +2754,11 @@ function showViewer(idx) {
     img.removeAttribute("src");
     img.hidden = true;
     card.hidden = false;
-    card.replaceChildren(
+    card.replaceChildren(...[ // replaceChildren は null を「null」という文字にするので除く
       h("div", { class: "vc-cat" }, h("i", { style: `background:${memoColor(memo)}` }), memo.category || ""),
       h("div", { class: "vc-title" }, `#${memo.no ?? ""} ${memo.title || "（無題）"}`),
       memo.note ? h("div", { class: "vc-note" }, memo.note) : null,
-      h("div", { class: "vc-meta" }, [fmtDate(memo.createdAt), memo.address || "", (memo.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")));
+      h("div", { class: "vc-meta" }, [fmtDate(memo.createdAt), memo.address || "", (memo.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　"))].filter(Boolean));
   }
   $("#v-title").textContent = `#${memo.no ?? ""} ${memo.title || (memo.kind === "photo" ? "写真" : "（無題）")}`;
   $("#v-meta").textContent = photo
