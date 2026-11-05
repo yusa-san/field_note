@@ -856,15 +856,6 @@ function renderMarker(m) {
     loadPopupThumb(cur, el, e.popup);
     loadPopupAudio(cur, el, e.popup);
   });
-  // 写真のピン（サムネイル・大きく表示）は、押すと見返す画面に（全メモを番号順に、この写真から）。小さいピンはこれまでどおりポップアップ
-  if (feat || (ph && S.thumbMode)) {
-    mk.off("click", mk._openPopup, mk);
-    mk.on("click", () => {
-      if (PIN.on || SH.on) return; // ピンを動かしている間は使わない
-      openPlayback(undefined, { startMemoId: m.id });
-    });
-    mk._fnPhotoPin = true;
-  }
   S.markers.set(m.id, mk);
   if (PIN.on) enablePinDrag(m.id, mk);
   if (SH.on) shiftHookMarker(m.id, mk);
@@ -889,7 +880,8 @@ async function loadPopupThumb(m, el, popup) {
   photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const img = h("img", { src: thumbUrl(photos[0]), alt: "写真（タップで拡大）" });
   img.onload = () => popup.isOpen() && popup.update();
-  img.onclick = () => { S.map.closePopup(); openPlayback(undefined, { startMemoId: m.id }); }; // 地図の写真のピンと同じ見返す画面
+  // ポップアップのサムネイルを押すと見返す画面に（全メモを番号順に、このメモの写真から）
+  img.onclick = () => { S.map.closePopup(); openPlayback(undefined, { startMemoId: m.id }); };
   box.replaceChildren(img);
   if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚（タップで表示）`));
 }
