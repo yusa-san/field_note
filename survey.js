@@ -80,6 +80,7 @@ function startPinEdit(focusId) {
   S.map.closePopup();
   PIN.on = true;
   PIN.undo = [];
+  clUpdate(); // まとめていたピンを全部出す
   document.body.classList.add("pin-edit");
   for (const [id, mk] of S.markers) enablePinDrag(id, mk);
   const undoBtn = h("button", { type: "button", class: "chip", disabled: true }, "元に戻す");
@@ -136,6 +137,7 @@ function stopPinEdit() {
   for (const mk of S.markers.values()) if (mk.dragging) { mk.dragging.disable(); mk.off("dragend"); }
   PIN.bar?.remove();
   PIN.bar = null;
+  clUpdate();
 }
 
 /* ====================================================================
