@@ -94,7 +94,7 @@ function ovlOrder() {
   const m = OVL.map;
   if (!m) return;
   const ids = m.getStyle().layers.map((l) => l.id);
-  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : id.startsWith("im-") ? 3 : 2);
+  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : id.startsWith("im-") ? 3 : id.startsWith("bd-") ? 4 : 2);
   const sorted = [...ids].sort((a, b) => rank(a) - rank(b) || ids.indexOf(a) - ids.indexOf(b));
   for (const id of sorted) m.moveLayer(id);
 }
@@ -508,13 +508,14 @@ async function estatApplyAll() {
  * ==================================================================== */
 async function dataRestore() {
   await imLoadAll();
-  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on) || IMP.list.some((l) => l.on);
+  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on) || IMP.list.some((l) => l.on) || bdCfg().city || bdCfg().town;
   if (!any) return;
   try {
     await greenApply();
     await reinfoApplyAll();
     await estatApplyAll();
     await imApplyAll();
+    await bdApply();
   } catch (e) {
     console.warn("データの重ね合わせを復元できません", e);
   }
@@ -576,6 +577,10 @@ function dataLegendGroups(filterKeys) {
     }
     out.push({ key: "data:es:" + lay.id, title: `${lay.title}${lay.unit ? `（${lay.unit}）` : ""}`, items });
   }
+  const bc = bdCfg();
+  if ((bc.city || bc.town) && (!filterKeys || filterKeys.includes("data:bd"))) {
+    out.push({ key: "data:bd", title: "境界", items: [bc.city && { color: BD_CITY_COLOR, text: "市区町村界（都府県界は太線）", kind: "line" }, bc.town && { color: BD_TOWN_COLOR, text: `町丁・字界（${bdTownYear()} 年国勢調査）`, kind: "line" }].filter(Boolean) });
+  }
   return out.concat(imLegendGroups(filterKeys));
 }
 const fmtNum = (v) => (v == null || !Number.isFinite(v) ? "—" : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("ja-JP") : String(+v.toPrecision(3)));
@@ -609,9 +614,14 @@ function dataLayerClick(latlng) {
   if (!m) return false;
   const p = m.project([latlng.lng, latlng.lat]);
   const ids = m.getStyle().layers.map((l) => l.id).filter((id) => /^(gr|ri|es|im)-/.test(id));
-  if (!ids.length) return false;
+  // 境界は面の中の 1 点で引く（境目の近くで隣の地域まで拾わないように）。町丁・字 → 市区町村の順
+  const bdIds = ["bd-town-area", "bd-city-area"].filter((id) => m.getLayer(id));
+  if (!ids.length && !bdIds.length) return false;
   let feats = [];
-  try { feats = m.queryRenderedFeatures([[p.x - 7, p.y - 7], [p.x + 7, p.y + 7]], { layers: ids }); } catch { return false; }
+  try {
+    if (ids.length) feats = m.queryRenderedFeatures([[p.x - 7, p.y - 7], [p.x + 7, p.y + 7]], { layers: ids });
+    for (const id of bdIds) feats.push(...m.queryRenderedFeatures(p, { layers: [id] }).slice(0, 1));
+  } catch { return false; }
   if (!feats.length) return false;
   const seen = new Set(), blocks = [];
   for (const f of feats) {
@@ -621,7 +631,9 @@ function dataLayerClick(latlng) {
     if (blocks.length >= 4) break;
     const pr = f.properties || {};
     let title, rows;
-    if (f.layer.id.startsWith("gr-")) {
+    if (f.layer.id.startsWith("bd-")) {
+      ({ title, rows } = bdClickRows(f));
+    } else if (f.layer.id.startsWith("gr-")) {
       const g = GREEN_GROUPS.find((x) => f.layer.id.startsWith(`gr-${x.id}-`));
       title = `${pr._k || ""}`;
       rows = Object.entries(pr).filter(([k]) => !k.startsWith("_")).map(([k, v]) => [k, v]);
@@ -655,6 +667,7 @@ function dataPrintCandidates() {
   for (const [id, lc] of Object.entries(reinfoCfg().layers)) if (lc.on && OVL.map?.getSource(`ri-${id}`)) out.push({ key: "data:ri:" + id, name: reinfoApi(id).name, kind: "data" });
   for (const lay of estatCfg().layers) if (lay.on && OVL.map?.getSource(`es-${lay.id}`)) out.push({ key: "data:es:" + lay.id, name: `e-Stat：${lay.title}`, kind: "data" });
   for (const rec of IMP.list) if (rec.on && OVL.map?.getSource(`im-${rec.id}`)) out.push({ key: "data:im:" + rec.id, name: `ファイル：${rec.name}`, kind: "data" });
+  if (OVL.map?.getLayer("bd-city-line") || OVL.map?.getLayer("bd-town-line")) out.push({ key: "data:bd", name: "境界（市区町村界・町丁・字界）", kind: "data" });
   return out;
 }
 /** 印刷用：選んだキーのレイヤだけを含むスタイル */
@@ -663,7 +676,8 @@ function dataPrintStyle(keys) {
   const keep = (id) => (id.startsWith("gr-") && keys.includes("data:green"))
     || (id.startsWith("ri-") && keys.includes("data:ri:" + id.split("-")[1]))
     || (id.startsWith("es-") && keys.includes("data:es:" + id.split("-")[1]))
-    || (id.startsWith("im-") && keys.includes("data:im:" + id.split("-")[1]));
+    || (id.startsWith("im-") && keys.includes("data:im:" + id.split("-")[1]))
+    || (id.startsWith("bd-") && !id.endsWith("-area") && keys.includes("data:bd"));
   const layers = st.layers.filter((l) => keep(l.id));
   const used = new Set(layers.map((l) => l.source));
   const sources = Object.fromEntries(Object.entries(st.sources).filter(([k]) => used.has(k)));
@@ -674,6 +688,7 @@ function dataCredits(keys) {
   if (keys.includes("data:green")) c.push(GREEN_ATTR + "（CC BY 4.0）");
   if (keys.some((k) => k.startsWith("data:ri:"))) c.push("不動産情報ライブラリ（国土交通省）");
   if (keys.some((k) => k.startsWith("data:es:"))) c.push("政府統計の総合窓口（e-Stat）・Geoshape 市区町村界（CODH, 国土数値情報 行政区域を加工）");
+  if (keys.includes("data:bd")) c.push([bdCfg().city && "行政界：国土地理院・Geoshape 市区町村界（CODH）", bdCfg().town && `町丁・字界：e-Stat 国勢調査 小地域境界（${bdTownYear()} 年）`].filter(Boolean).join("・"));
   const im = IMP.list.filter((r) => keys.includes("data:im:" + r.id));
   if (im.some((r) => r.kind === "fgd")) c.push("基盤地図情報（国土地理院）");
   const other = im.filter((r) => r.kind !== "fgd");
@@ -704,6 +719,8 @@ function dataPanelRow() {
     h("div", { class: "menu-grid", style: "margin-top:6px" },
       h("button", { type: "button", class: "btn secondary", onclick: openReinfoSheet }, `不動産情報ライブラリ${nRi ? `（${nRi}）` : ""}`),
       h("button", { type: "button", class: "btn secondary", onclick: openEstatSheet }, `e-Stat 統計${nEs ? `（${nEs}）` : ""}`)),
+    h("div", { class: "lbl-plain", style: "margin-top:12px;font-weight:700" }, "境界"),
+    bdPanel(),
     h("div", { class: "lbl-plain", style: "margin-top:12px;font-weight:700" }, "ファイルから（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
     imPanel());
 }

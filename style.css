@@ -648,3 +648,11 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 .esg-ds .s { font-size: 12px; color: var(--fg-2); }
 .esg-fresh { display: block; margin-top: 2px; }
 .esg-fresh.old { color: #b26a00; }
+/* 境界 */
+#sheet-body .bd-row { display: flex; flex-direction: row; gap: 10px; align-items: flex-start; cursor: pointer; margin: 0; font-size: 14px; color: var(--fg); }
+#sheet-body .bd-row input { margin-top: 3px; flex: none; width: auto; }
+.bd-sw { display: inline-block; width: 18px; height: 0; border-top: 3px dashed; margin-right: 6px; vertical-align: middle; }
+.bd-sw.city { border-color: #6a3d9a; }
+.bd-sw.town { border-top-style: solid; border-top-width: 2px; border-color: #c2410c; }
+#sheet-body .bd-lab { font-size: 13px; margin: 6px 0 0 30px; display: flex; align-items: center; gap: 6px; }
+.bd-status:empty { display: none; }

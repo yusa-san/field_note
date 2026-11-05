@@ -47,7 +47,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html style.css vector.js dem.js reinfo-catalog.js datalayers.js estat-gis-catalog.js estatgis.js importlayers.js georef.js print.js fieldtools.js extra-data.js extralayers.js survey.js memo-tools.js asr-worker.js app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
+          cp index.html style.css vector.js dem.js reinfo-catalog.js datalayers.js estat-gis-catalog.js estatgis.js boundary.js importlayers.js georef.js print.js fieldtools.js extra-data.js extralayers.js survey.js memo-tools.js asr-worker.js app.js sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png _site/
           mkdir -p _site/data
           cp green/tokyo_green.pmtiles _site/data/
       - uses: actions/configure-pages@v5
