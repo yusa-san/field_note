@@ -6,6 +6,7 @@
  *   ほかは近くのまとまりの件数に入れる
  * - ピンを動かす・まとめてずらす間は、すべてのピンを出す（まとめない）
  * - 設定：自動（メモ 60 件以上でまとめる）／いつもまとめる／まとめない
+ * - 「地図にピンを表示」で出さないメモは、まとまりにも入れない（一覧から選んだもの・ポップアップを開いたものは一時的に出す）
  */
 const CL = { on: false, visible: new Set(), forced: new Set(), clusters: [], raf: 0, batch: false };
 const CL_MAX_ZOOM = 17; // これ以上の拡大ではまとめない
@@ -15,31 +16,43 @@ function clActive() {
   if (!S.map || PIN.on || SH.on) return false;
   const mode = clMode();
   if (mode === "off") return false;
-  if (mode === "auto" && S.memos.size < CL_AUTO_MIN) return false;
+  if (mode === "auto" && clShownCount() < CL_AUTO_MIN) return false;
   return S.map.getZoom() < CL_MAX_ZOOM;
 }
+function clShownCount() {
+  if (pinsMode() === "all") return S.memos.size;
+  let n = 0;
+  for (const m of S.memos.values()) if (pinShown(m)) n++;
+  return n;
+}
 /** renderMarker から：このメモのピンを今地図に置くか */
-const clShows = (id) => !CL.on || CL.visible.has(id) || CL.forced.has(id);
+const clShows = (id) => CL.forced.has(id) || (pinShown(S.memos.get(id)) && (!CL.on || CL.visible.has(id)));
+/** 地図に置くピンを入れ替える（差分だけ） */
+function clSync() {
+  for (const [id, mk] of S.markers) {
+    const show = clShows(id);
+    if (show && !mk._map) mk.addTo(S.map);
+    else if (!show && mk._map && !mk.isPopupOpen?.()) S.map.removeLayer(mk);
+  }
+}
 function clSchedule() {
   if (CL.batch || CL.raf) return;
   CL.raf = requestAnimationFrame(() => { CL.raf = 0; clUpdate(); });
 }
 function clUpdate() {
   if (!S.map) return;
-  const was = CL.on;
   CL.on = clActive();
   for (const c of CL.clusters) c.remove();
   CL.clusters = [];
   if (!CL.on) {
     CL.visible.clear();
-    if (was) for (const mk of S.markers.values()) if (!mk._map) mk.addTo(S.map);
+    clSync();
     return;
   }
   const z = S.map.getZoom();
   const b = S.map.getBounds().pad(0.35); // 少し外側まで（動かしたとき端が欠けないように）
   const thumbs = S.thumbMode;
-  const pinMode = photoPinsMode();
-  const memos = [...S.memos.values()].filter((m) => b.contains([m.lat, m.lon]));
+  const memos = [...S.memos.values()].filter((m) => pinShown(m) && b.contains([m.lat, m.lon]));
   const px = (m) => S.map.project([m.lat, m.lon], z);
   const vis = new Set();
   const rest = [];
@@ -75,17 +88,12 @@ function clUpdate() {
     if (list.length === 1 && !demoted.has(list[0].id)) { vis.add(list[0].id); continue; }
     list.sort((a, c) => (a.no || 0) - (c.no || 0));
     const lat = list.reduce((s, m) => s + m.lat, 0) / list.length, lon = list.reduce((s, m) => s + m.lon, 0) / list.length;
-    // 代表：写真を出す縮尺なら写真のあるもの（お気に入りだけの設定ならお気に入り）
-    const rep = pinMode !== "none" && (thumbs || list.length === 1) ? list.find((m) => S.memoThumb.has(m.id) && (pinMode === "all" || m.featured)) : null;
+    // 代表：写真を出す縮尺なら写真のあるもの（お気に入りを先に）
+    const rep = thumbs || list.length === 1 ? list.find((m) => S.memoThumb.has(m.id) && m.featured) || list.find((m) => S.memoThumb.has(m.id)) : null;
     CL.clusters.push(clMarker(lat, lon, list, rep));
   }
-  // 地図に置くピンを入れ替える（差分だけ）
-  for (const [id, mk] of S.markers) {
-    const show = vis.has(id) || CL.forced.has(id);
-    if (show && !mk._map) mk.addTo(S.map);
-    else if (!show && mk._map && !mk.isPopupOpen?.()) S.map.removeLayer(mk);
-  }
   CL.visible = vis;
+  clSync();
   for (const c of CL.clusters) c.addTo(S.map);
 }
 /** まとまりのマーカー */

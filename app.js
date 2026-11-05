@@ -823,17 +823,18 @@ function updateCounts() {
   $("#unsaved-badge").hidden = !dirty;
 }
 
-/** 「地図に写真を表示」：none 表示しない／fav お気に入り／all 全て表示 */
-function photoPinsMode() {
-  const v = Settings.data.photoPins;
-  if (v === "none" || v === "fav" || v === "all") return v;
-  return Settings.data.photoPinsFavOnly ? "fav" : "all"; // 前の設定（お気に入りだけ）から
+/** 「地図にピンを表示」：none 表示しない／fav お気に入りだけ／all 全て表示（写真・メモのピンそのものを出すか） */
+function pinsMode() {
+  const v = Settings.data.mapPins;
+  return v === "none" || v === "fav" || v === "all" ? v : "all";
 }
+/** このメモのピンを設定上出すか（ピンを動かす・まとめてずらす間はすべて出す） */
+const pinShown = (m) => !!m && (PIN.on || SH.on || pinsMode() === "all" || (pinsMode() === "fav" && !!m.featured));
 /** お気に入りの写真の大きさの倍率：ズーム 16 以上でそのまま、15 で 3/4、14 で半分、13 以下は 0（ふつうのピンにしてまとめる） */
 const featScale = (z = S.map ? S.map.getZoom() : 16) => (z >= 16 ? 1 : z >= 15 ? 0.75 : z >= 14 ? 0.5 : 0);
 /** お気に入りの写真のアイコンの大きさ（大きく出さないときは null）。地図のピンとまとめる処理で共通 */
 function featIconSize(m, ph = S.memoThumb.get(m.id)) {
-  if (!ph || !m.featured || photoPinsMode() === "none") return null;
+  if (!ph || !m.featured) return null;
   const sc = featScale();
   if (!sc) return null;
   const k = Math.min(4, Math.max(2, Number(m.featured) || 3));
@@ -856,7 +857,7 @@ function renderMarker(m) {
       className: "photo-pin feat", iconSize: [fw, fh], iconAnchor: [fw / 2, fh + 10], popupAnchor: [0, -fh - 8],
       html: `<div class="pp" style="border-color:${color};width:${fw}px;height:${fh}px"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
     })
-    : ph && S.thumbMode && photoPinsMode() === "all" // 「地図に写真を表示」が「全て表示」のときだけ（ほかは小さいピン）
+    : ph && S.thumbMode // ズーム 15 以上は写真のサムネイル
     ? L.divIcon({
       className: "photo-pin", iconSize: [48, 48], iconAnchor: [24, 58], popupAnchor: [0, -56],
       html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
@@ -1532,22 +1533,20 @@ function openList() {
     if (!shown.length) return toast("見返すメモがありません");
     openPlayback(shown, { photosOnly: listState.view === "photos", resume: true });
   } }, "見返す");
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "opt-rows list-opt" }, colorBySeg(() => render()), photoPinsSeg()), list, tracksBox, bar), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "opt-rows list-opt" }, colorBySeg(() => render()), pinsSeg()), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
 }
-/** 地図の写真（サムネイル）を、すべてのメモに出すか、お気に入りだけにするか */
-/** 地図に写真を表示：表示しない／お気に入り／全て表示 */
-function photoPinsSeg() {
-  return optSeg("地図に写真を表示", [["none", "表示しない"], ["fav", "お気に入り"], ["all", "全て表示"]], photoPinsMode, (v) => {
-    Settings.data.photoPins = v;
-    delete Settings.data.photoPinsFavOnly;
+/** 地図にピンを表示：表示しない／お気に入り／全て表示 */
+function pinsSeg() {
+  return optSeg("地図にピンを表示", [["none", "表示しない"], ["fav", "お気に入り"], ["all", "全て表示"]], pinsMode, (v) => {
+    Settings.data.mapPins = v;
+    delete Settings.data.photoPins; delete Settings.data.photoPinsFavOnly; // 前の「地図に写真を表示」
     Settings.save();
-    for (const m of S.memos.values()) if (S.memoThumb.has(m.id)) renderMarker(m);
     clUpdate();
-    const n = [...S.memos.values()].filter((m) => m.featured && m.photoCount).length;
-    toast(v === "none" ? "地図に写真を出しません（ピンだけ）" : v === "fav" ? (n ? `お気に入り（${n} 件）の写真だけを地図に出します` : "お気に入りはまだありません。見返す画面やメモの画面で付けられます") : "地図に写真をすべて出します（ズーム 15 以上）", 2600);
+    const n = [...S.memos.values()].filter((m) => m.featured).length;
+    toast(v === "none" ? "地図にピンを出しません（メモは一覧から見られます）" : v === "fav" ? (n ? `お気に入り（${n} 件）のピンだけを地図に出します` : "お気に入りはまだありません。見返す画面やメモの画面で付けられます") : "地図にすべてのピンを出します", 2600);
   });
 }
 function renderGallery(box, memos, allPhotos) {
@@ -2468,8 +2467,8 @@ async function openMenu() {
         h("label", {}, "記録者", obs)),
       sec("カテゴリ", "名前・色・並び順を変えられます（すぐ反映）", cats),
       sec("地図のピン", null,
-        h("div", { class: "opt-rows" }, colorBySeg(), photoPinsSeg(), clusterSeg()),
-        hint(`色分け：カテゴリ別か、記録者（ほかの人から取り込んだデータ）別か。地図に写真を表示：写真はズーム 15 以上で出ます。お気に入りの写真は引くと小さくなり、ズーム 13 以下ではほかと同じピンになります。重なるピン：引きの地図（ズーム ${CL_MAX_ZOOM} 未満）で、重なるピンを件数の丸にまとめて地図を軽くします（自動はメモ ${CL_AUTO_MIN} 件以上のとき）。丸を押すとその範囲へ拡大します。`)),
+        h("div", { class: "opt-rows" }, colorBySeg(), pinsSeg(), clusterSeg()),
+        hint(`色分け：カテゴリ別か、記録者（ほかの人から取り込んだデータ）別か。地図にピンを表示：写真・メモのピンを出すか（お気に入りだけ・すべて）。表示しないときも、一覧から選んだメモやいま書いたメモは一時的に出ます。写真はズーム 15 以上でサムネイルになり、お気に入りの写真は引くと小さく、ズーム 13 以下ではほかと同じピンになります。重なるピン：引きの地図（ズーム ${CL_MAX_ZOOM} 未満）で、重なるピンを件数の丸にまとめて地図を軽くします（自動はメモ ${CL_AUTO_MIN} 件以上のとき）。丸を押すとその範囲へ拡大します。`)),
       sec("GPS・方位の補正", "必要なときだけ。現在地ボタンの長押しでも開けます", h("button", { class: "btn secondary block", type: "button", onclick: openGpsCalib }, "補正の設定を開く"),
         h("div", { class: "msec-meta" }, (() => { const g = gpsCfg(); return [g.offset ? `位置の補正：北 ${g.offset.n} m・東 ${g.offset.e} m` : "", g.avgSec ? `平均化 ${g.avgSec} 秒` : "", g.maxAcc ? `±${g.maxAcc} m より悪い測位は使わない` : "", g.compass ? `方位 ${g.compass > 0 ? "+" : ""}${g.compass}°` : ""].filter(Boolean).join("・") || "補正なし"; })())),
       sec("写真・聞き取り", null,
