@@ -441,6 +441,7 @@ function estatColorExpr(lay) {
 }
 /** 1 つの e-Stat レイヤの地物を作る（値＋形） */
 async function estatBuild(lay) {
+  if (lay.src === "gis") return esgBuild(lay); // 町丁・字／地域メッシュ（estatgis.js）
   const values = lay.values || (await estatFetchValues(lay));
   const byArea = new Map();
   for (const v of values) byArea.set(v.area, v);
@@ -823,10 +824,26 @@ function openEstatSheet() {
       layersBox.append(h("div", { class: "ri-row" },
         h("div", { class: "ov-row" }, cb, h("div", {}, lay.title, h("small", {}, [lay.selText, d ? `${d.matched} 地域` : ""].filter(Boolean).join("・"))), rg),
         h("div", { class: "chips" }, h("label", { class: "inline", style: "margin:0" }, "色 ", ramp),
-          h("button", { type: "button", class: "chip", onclick: async () => { ES.data[lay.id] = null; const l = upd({ values: null }); try { await estatApplyOne(l); toast("取り直しました"); } catch (e) { toast(e.message, 4000); } } }, "取り直す"),
+          lay.src === "gis"
+            ? h("button", { type: "button", class: "chip", onclick: async () => {
+              // 今見ている範囲の市区町村・メッシュで作り直す
+              try {
+                const codes = lay.area === "town" ? await esgCitiesInView() : esgMeshesInView();
+                if (!codes.length) throw new Error("地図の範囲の市区町村が分かりませんでした");
+                if (lay.area !== "town" && codes.length > ESG_MAX_MESH[lay.area]) throw new Error("範囲が広すぎます。もう少し拡大してください");
+                toast("取得中…", 30000);
+                ES.data[lay.id] = null;
+                const l = upd({ codes, on: true });
+                await estatApplyOne(l);
+                const names = ES.data[l.id]?.names || [];
+                upd({ selText: esgSelText(l.selBase || "", names) });
+                toast("今の範囲で塗り直しました"); renderLayers();
+              } catch (e) { toast(e.message, 4000); }
+            } }, "今の範囲にする")
+            : h("button", { type: "button", class: "chip", onclick: async () => { ES.data[lay.id] = null; const l = upd({ values: null }); try { await estatApplyOne(l); toast("取り直しました"); } catch (e) { toast(e.message, 4000); } } }, "取り直す"),
           h("button", { type: "button", class: "chip", onclick: () => { if (!confirm(`「${lay.title}」を削除しますか？`)) return; ovlRemove(`es-${lay.id}`); estatSave({ layers: estatCfg().layers.filter((l) => l.id !== lay.id) }); delete ES.data[lay.id]; dataLegendUpdate(); renderLayers(); } }, "削除"))));
     }
-    if (!estatCfg().layers.length) layersBox.append(h("p", { class: "note" }, "まだありません。下で統計表を探して追加してください。"));
+    if (!estatCfg().layers.length) layersBox.append(h("p", { class: "note" }, "まだありません。下で統計を選んでください。"));
   };
   renderLayers();
 
@@ -854,15 +871,24 @@ function openEstatSheet() {
   };
   const form = h("form", { class: "gr-search" }, q, h("button", { type: "submit", class: "chip" }, "検索"));
   form.onsubmit = search;
+  const proxy = h("input", { type: "text", value: reinfoCfg().proxy || "", placeholder: "https://xxxx.workers.dev", inputmode: "url" });
+  proxy.onchange = () => reinfoSave({ proxy: proxy.value.trim() });
   openSheet("e-Stat 統計を重ねる", h("div", {},
     dataBack2(),
     h("div", { class: "sect-title" }, "表示中の統計"), layersBox,
-    h("div", { class: "sect-title" }, "統計表を探す"), form, results,
-    h("details", { open: !cfg.appId && !reinfoBase() }, h("summary", {}, "e-Stat API の設定"),
-      h("label", {}, "アプリケーション ID（e-Stat でユーザー登録すると無料で発行）", appId),
-      h("p", { class: "note" }, "ID はこの端末だけに保存されます。中継サーバ（不動産情報ライブラリの設定）に ID を預けている場合は空欄で構いません。")),
-    h("p", { class: "note" }, "市区町村・都道府県・地域メッシュ（1km など）単位の統計表を、地図上で塗り分けます。市区町村の境界は Geoshape の市区町村界（2023 年）を使うため、それ以前の合併前の市町村は表示されません。小地域（町丁・字）の統計は境界が API で配布されていないため対象外です。"),
-    h("p", { class: "note" }, "このサービスは、政府統計総合窓口(e-Stat)の API 機能を使用していますが、サービスの内容は国によって保証されたものではありません。")), { backdrop: false, height: "75vh" });
+    h("div", { class: "sect-title" }, "町丁・字やメッシュの統計を選ぶ"),
+    h("p", { class: "note", style: "margin-top:0" }, "国勢調査・経済センサス・将来推計人口を、今見ている地図の範囲について町丁・字ごと、またはメッシュごとに塗り分けます。単位を選んでから統計を選んでください。"),
+    esgChooser(),
+    h("details", { open: !reinfoBase() }, h("summary", {}, "中継サーバ（必須）"),
+      h("label", {}, "中継サーバの URL（不動産情報ライブラリと共通）", proxy),
+      h("p", { class: "note" }, "e-Stat の町丁・字やメッシュのデータはブラウザから直接取れないため、中継サーバ（Cloudflare Worker）を通します。README の「不動産情報ライブラリ・e-Stat の中継サーバ」の最新のコードを Worker に貼ってください（/estatgis に対応したもの）。一度取ったデータは端末に残るので、2 回目からは電波がなくても表示できます。")),
+    h("details", {}, h("summary", {}, "市区町村・都道府県単位の統計表を API で探す"),
+      h("p", { class: "note" }, "e-Stat の全統計表から言葉で探します。市区町村・都道府県単位の表が中心です。"),
+      form, results,
+      h("label", {}, "アプリケーション ID（e-Stat でユーザー登録すると無料で発行。中継サーバに預けている場合は空欄）", appId),
+      h("p", { class: "note" }, "市区町村の境界は Geoshape の市区町村界（2023 年）を使うため、それ以前の合併前の市町村は表示されません。")),
+    h("p", { class: "note" }, "出典：政府統計の総合窓口（e-Stat）。町丁・字の境界は国勢調査の小地域境界、メッシュの将来推計人口は国土交通省の推計（2015 年国勢調査基準）です。秘匿された地域（人が少ない地域など）は値を出しません。"),
+    h("p", { class: "note" }, "このサービスは、政府統計総合窓口(e-Stat)の API 機能を使用していますが、サービスの内容は国によって保証されたものではありません。")), { backdrop: false, height: "80vh" });
 }
 
 /** 統計表を選んだ後：表示する項目（表章・分類・時点）と地域の範囲を選ぶ */
