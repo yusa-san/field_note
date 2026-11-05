@@ -292,10 +292,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 
 /* 写真ビューア */
 #viewer { position: fixed; inset: 0; z-index: 3000; background: #000; color: #fff; }
-#v-stage { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; -webkit-overflow-scrolling: touch; }
-#v-stage img { max-width: 100vw; max-height: 100vh; max-height: 100dvh; object-fit: contain; display: block; }
-#v-stage.actual { place-items: start; }
-#v-stage.actual img { max-width: none; max-height: none; }
+#v-stage { position: absolute; inset: 0; overflow: hidden; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; cursor: zoom-in; }
+#v-stage img { max-width: 100vw; max-height: 100vh; max-height: 100dvh; object-fit: contain; display: block; transform-origin: center center; will-change: transform; -webkit-user-drag: none; pointer-events: none; }
+#v-stage.zoomed { cursor: grab; }
+#v-zoom { font-size: 12px; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+#viewer .v-top, #viewer .v-bottom { transition: opacity .2s; }
+#viewer.bare .v-top, #viewer.bare .v-bottom { opacity: 0; pointer-events: none; }
 .v-top, .v-bottom {
   position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
   background: linear-gradient(rgba(0, 0, 0, .65), rgba(0, 0, 0, 0));
@@ -656,3 +658,14 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 .bd-sw.town { border-top-style: solid; border-top-width: 2px; border-color: #c2410c; }
 #sheet-body .bd-lab { font-size: 13px; margin: 6px 0 0 30px; display: flex; align-items: center; gap: 6px; }
 .bd-status:empty { display: none; }
+/* 書き出す写真の画質 */
+.pq-row { margin-top: 10px; }
+#sheet-body .pq-lab { margin-top: 0; }
+.pq-desc { margin-top: 4px; }
+/* 地図で大きく表示する写真 */
+.feat-box { margin: 10px 0 4px; }
+.feat-box .feat-seg { margin: 6px 0 0 30px; max-width: 260px; }
+.feat-box .feat-note { margin: 4px 0 0 30px; font-size: 12px; }
+.photo-pin.feat .pp { border-width: 4px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, .55); }
+.photo-pin.feat .pp img { border-radius: 6px; }
+.photo-pin.feat .pp::after { bottom: -13px; }
