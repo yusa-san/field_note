@@ -77,6 +77,8 @@ function openPrint() {
   closeSheet(true);
   if (S.measure) endMeasure();
   setFollow(false);
+  // 印刷は北が上。範囲の枠を合わせる間は回転を止める
+  if (S.map.setBearing) { S.map.setBearing(0); S.map.touchRotate?.disable(); }
   if (!PR.active) {
     PR.active = true;
     document.body.classList.add("print-mode");
@@ -102,6 +104,7 @@ function closePrint() {
   PR.bar.remove();
   S.map.off("move zoom resize", prUpdateFrame);
   window.removeEventListener("resize", prUpdateFrame);
+  S.map.touchRotate?.enable();
 }
 
 /** 画面で使える範囲（枠を置ける場所） */
@@ -461,13 +464,13 @@ function prDrawMemos(ctx, ext, r, k, memos, labels) {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(rad(m.heading));
-      ctx.fillStyle = catColor(m.category);
+      ctx.fillStyle = memoColor(m);
       ctx.beginPath(); ctx.moveTo(0, -rr * 2); ctx.lineTo(rr * 0.6, -rr * 0.8); ctx.lineTo(-rr * 0.6, -rr * 0.8); ctx.closePath(); ctx.fill();
       ctx.restore();
     }
     ctx.beginPath();
     ctx.arc(x, y, rr, 0, Math.PI * 2);
-    ctx.fillStyle = catColor(m.category);
+    ctx.fillStyle = memoColor(m);
     ctx.fill();
     ctx.lineWidth = 2 * k;
     ctx.strokeStyle = "#fff";
@@ -769,7 +772,11 @@ async function prRender(cfg, ext, onProgress = () => {}) {
     const memos = prMemosIn(ext);
     prDrawMemos(mctx, ext, r, k, memos, cfg.memoLabels);
     const cats = new Map();
-    for (const m of memos) cats.set(m.category || "", (cats.get(m.category || "") || 0) + 1);
+    if (colorBy() === "owner") {
+      const own = new Map();
+      for (const m of memos) own.set(ownerOf(m), (own.get(ownerOf(m)) || 0) + 1);
+      for (const [n, c] of [...own].reverse()) legend.unshift({ type: "memo", color: ownerColor(n), text: `${n}（${c}）` });
+    } else for (const m of memos) cats.set(m.category || "", (cats.get(m.category || "") || 0) + 1);
     for (const [cat, n] of [...cats].sort((a, b) => Settings.data.categories.indexOf(a[0]) - Settings.data.categories.indexOf(b[0]))) {
       legend.unshift({ type: "memo", color: catColor(cat), text: `${cat || "未分類"}（${n}）` });
     }

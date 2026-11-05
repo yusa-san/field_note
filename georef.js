@@ -481,9 +481,7 @@ const PDFL = { items: new Map(), renderer: null }; // id -> item
 
 function pdfRenderer() {
   if (!PDFL.renderer) {
-    const pane = S.map.createPane("pdfPane");
-    pane.style.zIndex = 350;
-    pane.style.pointerEvents = "none"; // 地図やボタンの操作を邪魔しない
+    rotPaneAt("pdfPane", 350); // 地図と一緒に回転する面。操作は邪魔しない
     PDFL.renderer = new PdfCanvas({ pane: "pdfPane" }).addTo(S.map);
   }
   return PDFL.renderer;

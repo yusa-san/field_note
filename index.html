@@ -51,6 +51,9 @@
   <button class="fab" id="btn-crosshair" title="中心十字線" aria-label="中心十字線">
     <svg viewBox="0 0 24 24"><path d="M11 2h2v6h-2V2Zm0 14h2v6h-2v-6ZM2 11h6v2H2v-2Zm14 0h6v2h-6v-2Z"/></svg>
   </button>
+  <button class="fab" id="btn-north" title="北を上にする" aria-label="北を上にする" hidden>
+    <svg viewBox="0 0 24 24"><path d="M12 2 7.5 12h9L12 2Z" fill="#d0021b"/><path d="M12 22l4.5-10h-9L12 22Z" fill="currentColor" opacity=".55"/><text x="12" y="9.6" text-anchor="middle" font-size="5" font-weight="700" fill="#fff">N</text></svg>
+  </button>
   <button class="fab" id="btn-locate" title="現在地（タップで追従）" aria-label="現在地">
     <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 3h-2.1A7 7 0 0 0 13 5.1V3h-2v2.1A7 7 0 0 0 5.1 11H3v2h2.1a7 7 0 0 0 5.9 5.9V21h2v-2.1a7 7 0 0 0 5.9-5.9H21v-2Zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z"/></svg>
   </button>
@@ -141,6 +144,7 @@
 </template>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
 <script src="vector.js"></script>
 <script src="dem.js"></script>
 <script src="reinfo-catalog.js"></script>
@@ -151,6 +155,7 @@
 <script src="fieldtools.js"></script>
 <script src="extra-data.js"></script>
 <script src="extralayers.js"></script>
+<script src="survey.js"></script>
 <script src="memo-tools.js"></script>
 <script src="app.js"></script>
 

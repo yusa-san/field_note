@@ -252,6 +252,55 @@ function vtBuildStyle(presetKey, hidden = []) {
   return s;
 }
 
+/* ---------- 地図の回転への対応 ----------
+ * 地図は leaflet-rotate で回す（タイル・図形は「回転する面」に入る）。
+ * MapLibre（WebGL）の地図は回転する面に入れると四隅が欠けるので、回転しない面に置き、MapLibre 側を同じ向きに回す。 */
+/** 回転しない面（WebGL の地図用）。beforeMarkers：回転する面より上・ピンより下に置く */
+function mapPaneAt(name, z, beforeMarkers = false) {
+  let p = S.map.getPane(name);
+  if (p) return p;
+  p = S.map.createPane(name);
+  p.style.zIndex = z;
+  p.style.pointerEvents = "none";
+  if (beforeMarkers && S.map._norotatePane) S.map._mapPane.insertBefore(p, S.map._norotatePane);
+  return p;
+}
+/** 回転する面（タイル・canvas の重ね合わせ用） */
+function rotPaneAt(name, z) {
+  let p = S.map.getPane(name);
+  if (p) return p;
+  p = S.map.createPane(name, S.map._rotatePane || undefined);
+  p.style.zIndex = z;
+  p.style.pointerEvents = "none";
+  return p;
+}
+const mapBearing = () => (S.map && S.map.getBearing ? S.map.getBearing() : 0);
+function patchGLRotation() {
+  if (!L.MaplibreGL || L.MaplibreGL.__rotPatched) return;
+  L.MaplibreGL.__rotPatched = true;
+  const P = L.MaplibreGL.prototype;
+  // 回転しない面の座標で、画面の左上（＋余白）に置く
+  const topLeft = (self) => self._map._getMapPanePos().multiplyBy(-1).subtract(self._map.getSize().multiplyBy(self.options.padding));
+  const initC = P._initContainer;
+  P._initContainer = function () { initC.call(this); L.DomUtil.setPosition(this._container, this._roundPoint(topLeft(this))); };
+  P._update = function () {
+    if (!this._map) return;
+    this._offset = this._map.containerPointToLayerPoint([0, 0]);
+    if (this._zooming) return;
+    L.DomUtil.setPosition(this._container, this._roundPoint(topLeft(this)));
+    this._transformGL(this._glMap);
+  };
+  P._transformGL = function (gl) {
+    const c = this._map.getCenter();
+    gl.jumpTo({ center: [c.lng, c.lat], zoom: this._map.getZoom() - 1, bearing: -mapBearing() });
+  };
+  const anim = P._animateZoom;
+  P._animateZoom = function (e) { if (!mapBearing()) anim.call(this, e); };
+  const onAdd = P.onAdd, onRemove = P.onRemove;
+  P.onAdd = function (map) { onAdd.call(this, map); map.on("rotate", this._update, this); };
+  P.onRemove = function (map) { map.off("rotate", this._update, this); onRemove.call(this, map); };
+}
+
 /* ---------- 地図への表示 ---------- */
 let vtLibPromise = null;
 function vtLoadLibs() {
@@ -267,7 +316,7 @@ function vtLoadLibs() {
       s.onerror = () => rej(new Error("地図ライブラリを読み込めません（オフライン？）"));
       document.head.append(s);
     });
-    vtLibPromise = load(MAPLIBRE_JS).then(() => load(MAPLIBRE_LEAFLET_JS)).catch((e) => { vtLibPromise = null; throw e; });
+    vtLibPromise = load(MAPLIBRE_JS).then(() => load(MAPLIBRE_LEAFLET_JS)).then(patchGLRotation).catch((e) => { vtLibPromise = null; throw e; });
   }
   return vtLibPromise;
 }
@@ -280,7 +329,8 @@ async function makeVectorBase() {
   await vtLoadBaseStyle();
   await vtPrepareSource();
   const { style, hidden } = vtSettings();
-  const layer = L.maplibreGL({ style: vtBuildStyle(style, hidden), interactive: false, attributionControl: false, pane: "tilePane" });
+  mapPaneAt("vtPane", 300); // 回転する面（画像タイル）の下
+  const layer = L.maplibreGL({ style: vtBuildStyle(style, hidden), interactive: false, attributionControl: false, pane: "vtPane" });
   layer.on("add", () => { const c = layer.getContainer?.() || layer._container; if (c) c.style.zIndex = 1; });
   VT.layer = layer;
   return layer;
