@@ -646,3 +646,5 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 .esg-ds:active { background: var(--bg-2); }
 .esg-ds .t { font-size: 14.5px; font-weight: 600; }
 .esg-ds .s { font-size: 12px; color: var(--fg-2); }
+.esg-fresh { display: block; margin-top: 2px; }
+.esg-fresh.old { color: #b26a00; }

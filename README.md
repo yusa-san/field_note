@@ -158,7 +158,17 @@ ZIP には元の切り出し画像 `overlays/pdfmap_01.jpg` と対応点も入�
 - 一度取ったデータは端末（Cache Storage）に残るので、2 回目からは電波がなくても表示できます。中継サーバにも 30 日残ります
 - 秘匿された地域（人が少ないなど）は「秘匿（合算先）」と表示し、色を付けません。統計の「-」は 0 として扱います
 - データは e-Stat「地図で見る統計（統計GIS）」のダウンロード（統計データ・境界データ）を中継サーバ（`/estatgis/data`）経由で取ります。ブラウザから直接は取れない（CORS 非対応）ため、中継サーバが必要です（e-Stat のアプリケーション ID は不要）
-- 一覧（`estat-gis-catalog.js`）は e-Stat の定義書（PDF）から `tools/build_estat_gis_catalog.py` で作ったもの
+- 一覧（`estat-gis-catalog.js`）は e-Stat の定義書（PDF）から `tools/build_estat_gis_catalog.py` で作ったもの（載せる表は `tools/estat_gis_tables.json`）
+
+**データの新しさ**
+
+- **新しい統計表の自動確認**：GitHub Actions（`.github/workflows/estat-catalog.yml`）が毎月 6 日に、e-Stat に新しい統計表が出ていないかを確かめます（前回確かめた表 ID より後ろを、定義書の PDF で 1 つずつ確認）。町丁・字等／メッシュの表で、データが実際に取れ、町丁・字等なら境界データも公開済みのものを一覧に足し、プルリクを開きます。データや境界がまだのものは `pending` に残して翌月また確かめます（1 年で打ち切り）。手動では Actions の「e-Stat 統計一覧の更新確認」→「Run workflow」
+  - プルリクを開くには、リポジトリの Settings → Actions → General →「Workflow permissions」で「Allow GitHub Actions to create and approve pull requests」に印を付けてください（付けていないときは Issue で知らせます）
+  - 自動で足した統計は題名が e-Stat の表名のままです（`auto: true`）。必要なら `tools/estat_gis_tables.json` を直して `python3 tools/build_estat_gis_catalog.py` で作り直します
+- **一覧の更新日**：「e-Stat 統計」の画面に「統計の一覧：YYYY-MM-DD 更新」と出ます
+- **取ったデータの取得日**：表示中の統計ごとに「2020 年 国勢調査・YYYY-MM-DD に e-Stat から取得」と出ます（中継サーバが e-Stat から取った日。中継サーバのキャッシュから返したときもその日）
+- **端末のデータは 90 日で取り直し**：90 日たったものは次に表示するときに取り直します（通信できないときは古いものを使い、「取得から 90 日以上たっています」と出します）。「最新を取り直す」で、端末と中継サーバのキャッシュを使わずにすぐ e-Stat から取り直せます
+- **新しい調査の案内**：同じ統計のより新しい年（例：2025 年国勢調査）が一覧に入ると、表示中の統計に「新しい調査（2025 年）があります」と出ます
 
 **市区町村・都道府県単位の統計表**：「市区町村・都道府県単位の統計表を API で探す」を開くと、e-Stat API で統計表を検索し、表章項目・分類・時点を選んで、**市区町村・都道府県・地域メッシュ**の単位で塗り分けます（5 段階・同数分割）。市区町村の境界は [Geoshape 市区町村界データセット](https://geoshape.ex.nii.ac.jp/city/)（2023 年 1 月 1 日、国土数値情報 行政区域を加工）を使い、都道府県を 1 つ選ぶと細かい境界、全国にすると粗い境界になります。地域メッシュは境界データが不要で、メッシュコードから四角形を作ります。（町丁・字は上の「町丁・字・メッシュの統計」で扱います。）
 
@@ -204,7 +214,7 @@ ZIP には元の切り出し画像 `overlays/pdfmap_01.jpg` と対応点も入�
    - `ALLOWED_ORIGINS`（Text）：`https://yusa-san.github.io`（このサイト以外からは使えないようにする）
 4. アプリの「データを重ねる」→「不動産情報ライブラリ」（または「e-Stat 統計」の「中継サーバ」）に Worker の URL（`https://fieldnote-proxy.<アカウント>.workers.dev`）を入れる
 
-**コードを更新したとき**（町丁・字／メッシュの統計を使うには `/estatgis` に対応した版が必要）：Worker の「Edit code」で中身を最新の `tools/proxy-worker.js` に貼り替えて「Deploy」するだけです（シークレットはそのまま残ります）。`/health` に `estatgis` の行が出て `"zip": true` なら対応済みです。
+**コードを更新したとき**（町丁・字／メッシュの統計を使うには `/estatgis` に対応した版が必要）：Worker の「Edit code」で中身を最新の `tools/proxy-worker.js` に貼り替えて「Deploy」するだけです（シークレットはそのまま残ります）。`/health` に `estatgis` の行が出て `"zip": true` なら対応済みです（「最新を取り直す」と取得日の表示には、`X-Upstream-Date` を返す最新の版が必要です）。
 
 **動作確認**：設定を変えたら、次のコマンドで確認できます（`Origin` を付けないと、ほかのサイトからの利用を防ぐ設定のため 403 になります）。`secrets` で設定の有無、`reinfolib`・`estat`・`estatgis` で Worker から各 API に届くか（応答の状態・時間・先頭の内容）が分かります。
 
@@ -431,6 +441,8 @@ gdf = gpd.GeoDataFrame(
 ├── icon.svg / icon-192.png / icon-512.png
 ├── tools/build_green.py  緑のオープンデータ → PMTiles（GDAL・tippecanoe を使用。tools/green_layers.tsv が分類の定義）
 ├── tools/proxy-worker.js 不動産情報ライブラリ・e-Stat の中継サーバ（Cloudflare Workers）
-├── tools/build_estat_gis_catalog.py  e-Stat 統計GIS の定義書（PDF）から estat-gis-catalog.js を作る
+├── tools/build_estat_gis_catalog.py  e-Stat 統計GIS の定義書（PDF）から estat-gis-catalog.js を作る（--discover で新しい表を探す）
+├── tools/estat_gis_tables.json       地図に出す e-Stat 統計GIS の表の一覧（どこまで確かめたか・保留中の表も）
+├── .github/workflows/estat-catalog.yml  e-Stat の新しい統計表を毎月確かめ、あれば一覧を更新するプルリクを開く
 └── .github/workflows/pages.yml  GitHub Pages への公開（緑のオープンデータの PMTiles もここで作成）
 ```

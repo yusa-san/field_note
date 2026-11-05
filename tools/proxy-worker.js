@@ -30,6 +30,7 @@ export default {
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Max-Age": "86400",
+      "Access-Control-Expose-Headers": "X-Upstream-Date",
       Vary: "Origin",
     };
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
@@ -88,10 +89,13 @@ export default {
       return new Response("not found", { status: 404, headers: cors });
     }
 
-    // Cloudflare のキャッシュ（キーは API キーを含まない元の URL）
+    // Cloudflare のキャッシュ（キーは API キーを含まない元の URL。fresh=1 は「キャッシュを使わず取り直す」の印なのでキーから除く）
+    const fresh = url.searchParams.get("fresh") === "1";
+    const keyUrl = new URL(url);
+    keyUrl.searchParams.delete("fresh");
     const cache = caches.default;
-    const cacheKey = new Request(url.toString(), { method: "GET" });
-    let res = await cache.match(cacheKey);
+    const cacheKey = new Request(keyUrl.toString(), { method: "GET" });
+    let res = fresh ? null : await cache.match(cacheKey);
     if (!res) {
       let up;
       try {
@@ -119,6 +123,7 @@ export default {
       }
       res = new Response(body, up);
       res.headers.set("Cache-Control", ok ? `public, max-age=${ttl}` : "no-store");
+      res.headers.set("X-Upstream-Date", new Date().toISOString()); // e-Stat などから取った日時（キャッシュから返すときもこの日時のまま）
       if (ok) ctx.waitUntil(cache.put(cacheKey, res.clone()).catch(() => {}));
     }
     const out = new Response(res.body, res);

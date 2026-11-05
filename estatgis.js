@@ -14,36 +14,74 @@ const ESG_UNITS = [
 ];
 const ESG_UNIT_NAME = Object.fromEntries(ESG_UNITS);
 const ESG_UNIT_SHORT = { town: "町丁・字", m1: "1km", m500: "500m", m250: "250m" };
-const ESG_BOUNDARY = { 2020: "A002005212020", 2015: "A002005212015" }; // 国勢調査 小地域（町丁・字等）境界
+/** 町丁・字等の境界：国勢調査 小地域境界（一覧に境界の年 bnd があればそれ、なければ統計の年の直近の国勢調査） */
+const esgBoundaryId = (lay) => `A00200521${lay.bnd || lay.year - (lay.year % 5)}`;
 const ESG_CACHE = "fn-estatgis";
 
 /** よく使う組み合わせ（項目名で探すので統計表が変わっても動く） */
 const ESG_PRESETS = [
-  { name: "人口", ds: /人口・世帯（|男女別人口・世帯数/, num: /^(男女別人口（総数） \/ )?人口(（総数）|総数)$/, mode: "raw" },
-  { name: "人口密度", ds: /人口・世帯（|男女別人口・世帯数/, num: /^(男女別人口（総数） \/ )?人口(（総数）|総数)$/, mode: "density" },
-  { name: "高齢化率（65 歳以上）", ds: /年齢|人口・世帯（/, num: /(^|\/ )(総数)?65歳以上(人口)?( ?総数)?$/, den: /^(総数、年齢「不詳」含む|(.* \/ )?人口(（総数）|総数))$/, mode: "ratio" },
-  { name: "子どもの割合（15 歳未満）", ds: /年齢|人口・世帯（/, num: /(^|\/ )(総数15歳未満|0～14歳人口 ?総数)$/, den: /^(総数、年齢「不詳」含む|(.* \/ )?人口(（総数）|総数))$/, mode: "ratio" },
-  { name: "単身世帯の割合", ds: /世帯人員別/, num: /^世帯人員1人$/, den: /^一般世帯数/, mode: "ratio" },
-  { name: "持ち家の割合", ds: /住宅の所有の関係|住居の種類/, num: /持ち家/, den: /^(住宅に住む一般世帯|.*住宅に住む一般世帯.*)$/, mode: "ratio" },
-  { name: "従業者数（事業所）", ds: /事業所数・従業者数/, num: /^従業者数 \/ A～S全産業$/, mode: "raw" },
-  { name: "2050 年の人口", ds: /将来推計人口 2050/, num: /^人口総数$/, mode: "raw" },
+  { name: "人口", ds: /人口・世帯（|男女別人口.*世帯数|人口及び世帯/, num: /^(男女別人口（総数） \/ )?人口(（総数）|総数)$/, mode: "raw" },
+  { name: "人口密度", ds: /人口・世帯（|男女別人口.*世帯数|人口及び世帯/, num: /^(男女別人口（総数） \/ )?人口(（総数）|総数)$/, mode: "density" },
+  { name: "高齢化率（65 歳以上）", ds: /年齢|人口・世帯（|人口及び世帯/, num: /(^|\/ )(総数)?65歳以上(人口)?( ?総数)?$/, den: /^(総数、年齢「不詳」含む|(.* \/ )?人口(（総数）|総数))$/, mode: "ratio" },
+  { name: "子どもの割合（15 歳未満）", ds: /年齢|人口・世帯（|人口及び世帯/, num: /(^|\/ )(総数15歳未満|0～14歳人口 ?総数)$/, den: /^(総数、年齢「不詳」含む|(.* \/ )?人口(（総数）|総数))$/, mode: "ratio" },
+  { name: "単身世帯の割合", ds: /世帯人員/, num: /^世帯人員1人$/, den: /^一般世帯数/, mode: "ratio" },
+  { name: "持ち家の割合", ds: /住宅の所有|住居の種類/, num: /持ち家/, den: /^(住宅に住む一般世帯|.*住宅に住む一般世帯.*)$/, mode: "ratio" },
+  { name: "従業者数（事業所）", ds: /事業所数.*従業者数/, num: /^従業者数 \/ A～S全産業$/, mode: "raw" },
+  { name: "2050 年の人口", ds: /将来推計人口 ?2050/, num: /^人口総数$/, mode: "raw" },
 ];
 
 /* ---------- 取得（中継サーバ経由・端末キャッシュつき） ---------- */
-async function esgFetch(params) {
+const ESG_MAX_AGE = 90 * 864e5; // 端末に残したデータは 90 日で取り直す（通信できないときは古いものを使う）
+/**
+ * 統計GIS のファイルを取る。返り値 { blob, at }（at：中継サーバが e-Stat から取った日時。分からなければ端末が取った日時）
+ * fresh：端末と中継サーバのキャッシュを使わずに e-Stat から取り直す
+ */
+async function esgFetch(params, { fresh = false } = {}) {
   const base = reinfoBase();
   if (!base) throw new Error("中継サーバの URL が未設定です（e-Stat の地図用データはブラウザから直接取れないため）。下の「中継サーバ」に設定してください");
   const url = `${base}/estatgis/data?${new URLSearchParams(params)}`;
-  let cache = null;
-  try { cache = await caches.open(ESG_CACHE); const hit = await cache.match(url); if (hit) return hit.blob(); } catch {}
+  let cache = null, hit = null;
+  try { cache = await caches.open(ESG_CACHE); hit = await cache.match(url); } catch {}
+  const fromHit = async () => ({ blob: await hit.blob(), at: hit.headers.get("x-upstream-date") || hit.headers.get("x-fn-fetched") || null, cached: true });
+  if (hit && !fresh) {
+    const t = Date.parse(hit.headers.get("x-fn-fetched") || "");
+    if ((Number.isFinite(t) && Date.now() - t < ESG_MAX_AGE) || !navigator.onLine) return fromHit();
+  }
   let r;
-  try { r = await fetch(url); } catch { throw new Error("中継サーバに接続できません（通信状態を確認してください）"); }
-  if (r.status === 404) throw new Error(/estatgis/.test(await r.text().catch(() => "")) ? "この地域のデータはありません" : "中継サーバが古いようです（/estatgis に未対応）。README の手順で Worker のコードを貼り直してください");
-  if (!r.ok) throw new Error(`e-Stat から取得できませんでした（HTTP ${r.status}）`);
+  try { r = await fetch(fresh ? `${url}&fresh=1` : url, { cache: fresh ? "reload" : "default" }); }
+  catch { if (hit) return fromHit(); throw new Error("中継サーバに接続できません（通信状態を確認してください）"); }
+  if (r.status === 404) {
+    const nodata = /estatgis/.test(await r.text().catch(() => ""));
+    if (!nodata && hit) return fromHit();
+    throw new Error(nodata ? "この地域のデータはありません" : "中継サーバが古いようです（/estatgis に未対応）。README の手順で Worker のコードを貼り直してください");
+  }
+  if (!r.ok) { if (hit) return fromHit(); throw new Error(`e-Stat から取得できませんでした（HTTP ${r.status}）`); }
   const blob = await r.blob();
   if (blob.size < 100 || !/zip|octet/.test(r.headers.get("Content-Type") || "zip")) throw new Error("この地域のデータはありません");
-  try { await cache?.put(url, new Response(blob, { headers: { "Content-Type": "application/zip" } })); } catch {}
-  return blob;
+  const now = new Date().toISOString(), up = r.headers.get("X-Upstream-Date");
+  const headers = { "Content-Type": "application/zip", "x-fn-fetched": now };
+  if (up) headers["x-upstream-date"] = up;
+  try { await cache?.put(url, new Response(blob, { headers })); } catch {}
+  return { blob, at: up || now, cached: false };
+}
+
+/** 表示中のレイヤの鮮度の表示：「2020 年 国勢調査・2026-11-05 取得」 */
+function esgFreshText(lay) {
+  const at = lay.fetchedAt ? new Date(lay.fetchedAt) : null;
+  const ds = at ? `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}` : "";
+  const newer = esgNewerSurvey(lay);
+  return [`${lay.year} 年${lay.survey ? " " + lay.survey : ""}`, ds ? `${ds} に e-Stat から取得` : "", esgStale(lay) ? "取得から 90 日以上たっています" : "", newer ? `新しい調査（${newer} 年）があります` : ""].filter(Boolean).join("・");
+}
+const esgStale = (lay) => !!lay.fetchedAt && Date.now() - Date.parse(lay.fetchedAt) > ESG_MAX_AGE;
+/** 同じ統計（同じ題名・同じ単位）で、より新しい年の表が一覧にあればその年 */
+function esgNewerSurvey(lay) {
+  const cur = ESTAT_GIS.find((d) => d.units[lay.area] === lay.statsId);
+  if (!cur || /将来/.test(cur.title)) return null;
+  // 題名が同じか、項目の並び（先頭 5 つ）が同じなら「同じ統計の新しい年」とみなす（自動で足した表は題名が e-Stat のままのため）
+  const sig = (sid) => (ESTAT_GIS_ITEMS[sid] || []).slice(0, 5).map((x) => x[1].replace(/\s/g, "")).join("|");
+  const mine = sig(lay.statsId);
+  const ys = ESTAT_GIS.filter((d) => d.units[lay.area] && d.year > cur.year && d.survey === cur.survey && (d.title === cur.title || (mine && sig(d.units[lay.area]) === mine))).map((d) => d.year);
+  return ys.length ? Math.max(...ys) : null;
 }
 
 /** 統計データの ZIP → { cols: [{code, idx, label}], rows: Map(key → {name, city, hyosyo, htk, htksaki, vals: [文字列]}) } */
@@ -212,19 +250,20 @@ function esgValue(lay, row, areaKm2) {
 const esgUnitLabel = (lay) => (lay.mode === "density" ? `${lay.itemUnit || ""}/km²` : lay.mode === "ratio" ? "%" : lay.itemUnit || "");
 
 /** e-Stat 統計GIS レイヤの地物を作る（estatBuild から呼ばれる） */
-async function esgBuild(lay) {
+async function esgBuild(lay, { fresh = false } = {}) {
   const feats = [];
   let matched = 0;
-  const names = [];
+  const names = [], dates = [];
+  const get = async (params) => { const r = await esgFetch(params, { fresh }); if (r.at) dates.push(r.at); return r.blob; };
   for (const code of lay.codes) {
     let tbl;
-    try { tbl = await esgReadTable(await esgFetch({ statsId: lay.statsId, code, downloadType: "2" })); }
+    try { tbl = await esgReadTable(await get({ statsId: lay.statsId, code, downloadType: "2" })); }
     catch (e) { if (/ありません/.test(e.message)) continue; throw e; }
     const ci = tbl.cols.findIndex((c) => c.idx === lay.col);
     if (ci < 0) throw new Error("選んだ項目がデータにありません");
     const L2 = { ...lay, colAt: ci, denAt: lay.den != null ? tbl.cols.findIndex((c) => c.idx === lay.den) : -1 };
     if (lay.area === "town") {
-      const shapes = await esgReadBoundary(await esgFetch({ dlserveyId: ESG_BOUNDARY[lay.year] || ESG_BOUNDARY[2020], code, coordSys: "1", format: "shape", downloadType: "5", datum: "2000" }));
+      const shapes = await esgReadBoundary(await get({ dlserveyId: esgBoundaryId(lay), code, coordSys: "1", format: "shape", downloadType: "5", datum: "2000" }));
       // 同じ地域が複数の形（飛び地など）に分かれていることがあるので、面積は地域ごとに合計
       const areaBy = new Map();
       for (const s of shapes) areaBy.set(s.props.KEY_CODE, (areaBy.get(s.props.KEY_CODE) || 0) + (s.props.AREA || 0));
@@ -250,7 +289,12 @@ async function esgBuild(lay) {
   }
   if (!feats.length) throw new Error("この範囲にはデータがありません");
   const nums = feats.map((f) => f.properties.v);
-  ES.data[lay.id] = { features: feats, breaks: estatClasses(nums), kind: lay.area === "town" ? "town" : "mesh", matched, names };
+  // いちばん古いファイルの取得日を、このレイヤの「取得日」とする
+  const fetchedAt = dates.sort()[0] || null;
+  ES.data[lay.id] = { features: feats, breaks: estatClasses(nums), kind: lay.area === "town" ? "town" : "mesh", matched, names, fetchedAt };
+  if (fetchedAt && estatCfg().layers.some((l) => l.id === lay.id && l.fetchedAt !== fetchedAt)) {
+    estatSave({ layers: estatCfg().layers.map((l) => (l.id === lay.id ? { ...l, fetchedAt } : l)) });
+  }
   return ES.data[lay.id];
 }
 
@@ -376,7 +420,7 @@ async function esgAdd({ d, unit, num, den, mode, title, status }) {
     if (mode === "density") parts.push("面積あたり");
     if (mode === "ratio") parts.push(`÷ ${den.label.split(" / ").pop()}`);
     const lay = {
-      id: uuid().slice(0, 8), src: "gis", statsId: d.units[unit], area: unit, year: d.year, codes,
+      id: uuid().slice(0, 8), src: "gis", statsId: d.units[unit], area: unit, year: d.year, bnd: d.bnd || null, survey: d.survey, codes,
       col: num.idx, den: den ? den.idx : null, mode, itemUnit: num.unit,
       title: title ? `${title}（${d.year}）` : `${d.title}（${d.year}）`,
       selBase: `${parts.join(" ")}・${ESG_UNIT_NAME[unit]}`,
@@ -386,6 +430,7 @@ async function esgAdd({ d, unit, num, den, mode, title, status }) {
     const built = await esgBuild(lay);
     if (!built.matched) throw new Error("この範囲には値のある地域がありませんでした");
     lay.selText = esgSelText(lay.selBase, built.names);
+    lay.fetchedAt = built.fetchedAt;
     estatSave({ layers: [...estatCfg().layers, lay] });
     await estatApplyOne(lay);
     closeSheet(true);

@@ -822,7 +822,8 @@ function openEstatSheet() {
       ramp.onchange = () => { const l = upd({ ramp: ramp.value }); if (l.on) estatApplyOne(l); };
       const d = ES.data[lay.id];
       layersBox.append(h("div", { class: "ri-row" },
-        h("div", { class: "ov-row" }, cb, h("div", {}, lay.title, h("small", {}, [lay.selText, d ? `${d.matched} 地域` : ""].filter(Boolean).join("・"))), rg),
+        h("div", { class: "ov-row" }, cb, h("div", {}, lay.title, h("small", {}, [lay.selText, d ? `${d.matched} 地域` : ""].filter(Boolean).join("・")),
+          lay.src === "gis" ? h("small", { class: "esg-fresh" + (esgStale(lay) ? " old" : "") }, esgFreshText(lay)) : ""), rg),
         h("div", { class: "chips" }, h("label", { class: "inline", style: "margin:0" }, "色 ", ramp),
           lay.src === "gis"
             ? h("button", { type: "button", class: "chip", onclick: async () => {
@@ -841,6 +842,18 @@ function openEstatSheet() {
               } catch (e) { toast(e.message, 4000); }
             } }, "今の範囲にする")
             : h("button", { type: "button", class: "chip", onclick: async () => { ES.data[lay.id] = null; const l = upd({ values: null }); try { await estatApplyOne(l); toast("取り直しました"); } catch (e) { toast(e.message, 4000); } } }, "取り直す"),
+          lay.src === "gis"
+            ? h("button", { type: "button", class: "chip", onclick: async () => {
+              // 端末と中継サーバのキャッシュを使わずに e-Stat から取り直す
+              try {
+                toast("e-Stat から取り直しています…", 60000);
+                const l = upd({ on: true });
+                await esgBuild(l, { fresh: true });
+                await estatApplyOne(estatCfg().layers.find((x) => x.id === l.id));
+                toast("最新のデータで塗り直しました"); renderLayers();
+              } catch (e) { toast(e.message, 4000); }
+            } }, "最新を取り直す")
+            : "",
           h("button", { type: "button", class: "chip", onclick: () => { if (!confirm(`「${lay.title}」を削除しますか？`)) return; ovlRemove(`es-${lay.id}`); estatSave({ layers: estatCfg().layers.filter((l) => l.id !== lay.id) }); delete ES.data[lay.id]; dataLegendUpdate(); renderLayers(); } }, "削除"))));
     }
     if (!estatCfg().layers.length) layersBox.append(h("p", { class: "note" }, "まだありません。下で統計を選んでください。"));
@@ -878,6 +891,7 @@ function openEstatSheet() {
     h("div", { class: "sect-title" }, "表示中の統計"), layersBox,
     h("div", { class: "sect-title" }, "町丁・字やメッシュの統計を選ぶ"),
     h("p", { class: "note", style: "margin-top:0" }, "国勢調査・経済センサス・将来推計人口を、今見ている地図の範囲について町丁・字ごと、またはメッシュごとに塗り分けます。単位を選んでから統計を選んでください。"),
+    h("p", { class: "note esg-catalog-date" }, `統計の一覧：${typeof ESTAT_GIS_UPDATED === "string" ? ESTAT_GIS_UPDATED : "—"} 更新（e-Stat に新しい統計が出ていないか毎月自動で確かめています）。取ったデータは 90 日たつと取り直します。`),
     esgChooser(),
     h("details", { open: !reinfoBase() }, h("summary", {}, "中継サーバ（必須）"),
       h("label", {}, "中継サーバの URL（不動産情報ライブラリと共通）", proxy),
