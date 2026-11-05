@@ -79,9 +79,7 @@ function ovlReady() {
     await vtLoadLibs();
     await loadPmtiles();
     addProtocols();
-    const pane = S.map.getPane("dataPane") || S.map.createPane("dataPane");
-    pane.style.zIndex = 330; // 地図タイルの上、PDF 地図（350）の下
-    pane.style.pointerEvents = "none";
+    mapPaneAt("dataPane", 400, true); // 地図タイル・PDF 地図の上、ピンの下（回転しない面）
     OVL.layer = L.maplibreGL({ style: { version: 8, glyphs: VT_GLYPHS, sources: {}, layers: [] }, interactive: false, attributionControl: false, pane: "dataPane" }).addTo(S.map);
     OVL.map = OVL.layer.getMaplibreMap();
     if (!OVL.map.isStyleLoaded()) await new Promise((r) => OVL.map.once("load", r));
@@ -542,6 +540,8 @@ function scheduleDataRefresh() {
 /** 凡例の項目（地図左下の凡例と印刷で共通）。{ title, items: [{ color, text, kind }] , ramp? } */
 function dataLegendGroups(filterKeys) {
   const out = [];
+  const ow = !filterKeys && typeof ownerLegendGroup === "function" ? ownerLegendGroup() : null;
+  if (ow) out.push(ow);
   const g = greenCfg();
   if (g.on && (!filterKeys || filterKeys.includes("data:green"))) {
     out.push({ key: "data:green", title: "東京都 緑のオープンデータ", items: GREEN_GROUPS.filter((x) => !g.off.includes(x.id)).map((x) => ({ color: x.color, text: x.name, kind: x.id === "tree" ? "line" : "box" })) });

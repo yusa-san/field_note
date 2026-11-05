@@ -614,3 +614,20 @@ body.print-mode .cmp-bar, body.print-mode .cmp-info { display: none; }
 .jps-item img, .jps-noimg { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: var(--bg-2); display: block; }
 .jps-item b { display: block; font-size: 13.5px; font-weight: 600; }
 .jps-item small { display: block; font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+
+/* 方位磁石（地図を回したときだけ） */
+#btn-north svg { transition: transform .15s; }
+#btn-north[hidden] { display: none; }
+
+/* ピンを動かす・位置の補正 */
+.pin-bar { position: fixed; z-index: 560; left: 8px; right: 8px; top: calc(var(--safe-top) + 8px); border-radius: 14px; padding: 10px 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.pin-msg { font-size: 13px; line-height: 1.5; }
+.pin-msg b { display: block; font-size: 14px; }
+.pin-act { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.pin-act .btn { padding: 8px 18px; }
+body.pin-edit #status { visibility: hidden; }
+body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.photo-pin { cursor: grab; filter: drop-shadow(0 0 4px #ff6d00); }
+.calib-cross { position: fixed; z-index: 550; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; pointer-events: none;
+  background: linear-gradient(#d0021b, #d0021b) center / 2px 100% no-repeat, linear-gradient(#d0021b, #d0021b) center / 100% 2px no-repeat; border: 2px solid #d0021b; border-radius: 50%; }
+.seg.seg-sm button { padding: 7px 6px; font-size: 13px; }
+.msec.pick { border-color: var(--accent-2); }

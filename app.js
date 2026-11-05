@@ -270,7 +270,7 @@ function saveView() {
   const ov = {};
   for (const [id, o] of Object.entries(S.overlays)) ov[id] = o.opacity;
   try {
-    localStorage.setItem("fn.view", JSON.stringify({ lat: c.lat, lon: c.lng, z: S.map.getZoom(), base: S.baseId, overlays: ov, crosshair: S.crosshair }));
+    localStorage.setItem("fn.view", JSON.stringify({ lat: c.lat, lon: c.lng, z: S.map.getZoom(), bearing: S.map.getBearing ? Math.round(S.map.getBearing() * 10) / 10 : 0, base: S.baseId, overlays: ov, crosshair: S.crosshair }));
   } catch {}
 }
 
@@ -322,7 +322,9 @@ function setOverlay(id, opacity) {
 function initMap() {
   const saved = loadView();
   const v = saved || DEFAULT_VIEW;
-  S.map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 20, tapTolerance: 20 })
+  // 2 本指で回転（leaflet-rotate）。真北に戻すのは方位磁石ボタン
+  S.map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 20, tapTolerance: 20,
+    rotate: true, touchRotate: true, rotateControl: false, bearing: v.bearing || 0, shiftKeyRotate: true })
     .setView([v.lat, v.lon], v.z);
   S.map.attributionControl.setPrefix(false);
   L.control.scale({ imperial: false, position: "bottomleft" }).addTo(S.map);
@@ -336,6 +338,19 @@ function initMap() {
   });
   S.map.on("move", () => S.crosshair && updateStatusCoordOnly());
   S.map.on("dragstart", () => setFollow(false));
+  // 回転：方位磁石ボタン（回したときだけ出す）・撮影方向の矢印を地図に合わせる
+  const north = $("#btn-north");
+  const onRotate = () => {
+    const b = S.map.getBearing ? S.map.getBearing() : 0;
+    north.hidden = Math.abs(((b + 180) % 360) - 180) < 0.5;
+    north.querySelector("svg").style.transform = `rotate(${b}deg)`;
+    for (const i of document.querySelectorAll(".pp .hd")) i.style.transform = `rotate(${Number(i.dataset.h) + b}deg)`;
+    if (S.heading != null) drawHeading(S.heading);
+  };
+  S.map.on("rotate", onRotate);
+  S.map.on("rotate", () => { clearTimeout(S._rotSave); S._rotSave = setTimeout(saveView, 600); });
+  north.onclick = () => { S.map.setBearing(0); onRotate(); saveView(); };
+  onRotate();
   S.thumbMode = S.map.getZoom() >= THUMB_ZOOM;
   S.map.on("zoomend", () => {
     const tm = S.map.getZoom() >= THUMB_ZOOM;
@@ -472,7 +487,12 @@ function showGeoHelp() {
 let firstFix = true, moveToFirstFix = false;
 function onPosition(p) {
   const c = p.coords;
-  S.pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, altAcc: c.altitudeAccuracy, heading: c.heading, speed: c.speed, t: p.timestamp };
+  const raw = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, altAcc: c.altitudeAccuracy, heading: c.heading, speed: c.speed, t: p.timestamp };
+  // 任意の補正（ずれの修正・精度の悪い測位を除く）
+  const fixed = gpsCorrect(raw);
+  if (!fixed) { $("#gps-dot").className = "dot weak"; return; }
+  S.posRaw = raw;
+  S.pos = fixed;
   const ll = [S.pos.lat, S.pos.lon];
   if (!S.meMarker) {
     S.accCircle = L.circle(ll, { radius: S.pos.acc, color: "#1a73e8", weight: 1, fillOpacity: 0.1, interactive: false }).addTo(S.map);
@@ -576,7 +596,7 @@ async function startOrientation() {
     if (typeof e.webkitCompassHeading === "number") hd = e.webkitCompassHeading;
     else if (e.absolute && e.alpha != null) hd = 360 - e.alpha;
     if (hd == null) return;
-    S.heading = (hd + screenAngle() + 360) % 360;
+    S.heading = (hd + screenAngle() + compassOffset() + 720) % 360;
     scheduleHeadingDraw();
   };
   if ("ondeviceorientationabsolute" in window) window.addEventListener("deviceorientationabsolute", handler);
@@ -598,7 +618,7 @@ function drawHeading(hd) {
   const cone = el && el.querySelector(".me-cone");
   if (!cone) return;
   cone.hidden = false;
-  cone.style.transform = `rotate(${hd}deg)`;
+  cone.style.transform = `rotate(${hd + (S.map.getBearing ? S.map.getBearing() : 0)}deg)`; // 地図を回したぶんも足す
 }
 
 /* ====================================================================
@@ -796,12 +816,12 @@ function updateCounts() {
 function renderMarker(m) {
   const old = S.markers.get(m.id);
   if (old) S.map.removeLayer(old);
-  const color = catColor(m.category);
+  const color = memoColor(m);
   const ph = S.memoThumb.get(m.id);
   const icon = ph && S.thumbMode
     ? L.divIcon({
       className: "photo-pin", iconSize: [48, 48], iconAnchor: [24, 58], popupAnchor: [0, -56],
-      html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${m.heading != null ? `<i style="transform:rotate(${m.heading}deg)">▲</i>` : ""}</div>`,
+      html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${m.heading != null ? `<i class="hd" data-h="${m.heading}" style="transform:rotate(${m.heading + (S.map.getBearing ? S.map.getBearing() : 0)}deg)">▲</i>` : ""}</div>`,
     })
     : L.divIcon({
       className: "memo-pin", iconSize: [26, 26], iconAnchor: [13, 30], popupAnchor: [0, -28],
@@ -817,20 +837,23 @@ function renderMarker(m) {
       openMemoForm(S.memos.get(m.id));
     };
     el.querySelector('[data-pact="copy"]').onclick = () => copyText(`${cur.lat.toFixed(6)}, ${cur.lon.toFixed(6)}`);
+    el.querySelector('[data-pact="move"]').onclick = () => startPinEdit(m.id);
     e.popup.setContent(el);
     loadPopupThumb(cur, el, e.popup);
     loadPopupAudio(cur, el, e.popup);
   });
   S.markers.set(m.id, mk);
+  if (PIN.on) enablePinDrag(m.id, mk);
 }
 function popupHtml(m) {
   const d = S.pos ? `${fmtDist(distance(S.pos, m))} ${dirName(bearing(S.pos, m))}` : "";
   return `<div class="pt">#${m.no ?? ""} ${esc(m.title || "（無題）")}</div>
-    <div class="ps">${esc(m.category || "")}　${fmtDate(m.createdAt)}${d ? "　" + d : ""}</div>
+    <div class="ps">${esc(m.category || "")}${m.owner ? `　記録：${esc(m.owner)}` : ""}　${fmtDate(m.createdAt)}${d ? "　" + d : ""}${m.posEdited ? "　位置を手直し済み" : ""}</div>
     ${m.note ? `<div>${esc(m.note.slice(0, 240)).replace(/\n/g, "<br>")}</div>` : ""}
     <div class="pthumb"></div>
     <div class="pa">
       <button data-pact="edit">編集</button>
+      <button data-pact="move">位置を直す</button>
       <button data-pact="copy">座標コピー</button>
       <a href="https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lon}" target="_blank" rel="noopener">経路</a>
     </div>`;
@@ -922,7 +945,8 @@ function newMemo(loc) {
   return {
     id: uuid(), no: nextNo(), createdAt: nowIso(), updatedAt: nowIso(),
     lat: loc.lat, lon: loc.lon, source: loc.source,
-    accuracy: loc.source === "gps" && S.pos ? Math.round(S.pos.acc * 10) / 10 : null,
+    accuracy: loc.source === "gps" && S.pos ? Math.round((loc.acc ?? S.pos.acc) * 10) / 10 : null,
+    ...(loc.averaged ? { gpsAveraged: loc.averaged } : {}), ...(loc.corrected ? { gpsCorrected: true } : {}),
     gpsAltitude: loc.source === "gps" && S.pos && S.pos.alt != null ? Math.round(S.pos.alt * 10) / 10 : null,
     elevation: null, elevationSrc: null, address: null, mesh: meshCode(loc.lat, loc.lon),
     title: "", note: "", category: Settings.data.categories[0], tags: [], heading: null,
@@ -1162,7 +1186,7 @@ function addMemoHere() {
     return addMemoCenter();
   }
   if (S.pos.acc > 100) toast(`GPS の精度が低めです（±${Math.round(S.pos.acc)} m）`);
-  openMemoForm(null, { lat: S.pos.lat, lon: S.pos.lon, source: "gps" });
+  waitAveragedPosition().then((p) => openMemoForm(null, { lat: p.lat, lon: p.lon, source: "gps", acc: p.acc, averaged: p.averaged, corrected: p.corrected }));
 }
 function addMemoCenter() {
   if (!S.crosshair) toggleCrosshair(true);
@@ -1189,9 +1213,11 @@ function trackListBox() {
         if (S.shownTracks.has(t.id)) {
           S.map.removeLayer(S.shownTracks.get(t.id));
           S.shownTracks.delete(t.id);
+          rememberShownTracks();
         } else {
-          const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
+          const line = L.polyline(trackLatLngs(t), { color: trackColor(t), weight: 4, opacity: 0.8 }).addTo(S.map);
           S.shownTracks.set(t.id, line);
+          rememberShownTracks();
           // メモをタップしたときと同じく、一覧を閉じて軌跡の範囲を見せる
           if (t.points.length) { closeSheet(true); setFollow(false); S.map.fitBounds(line.getBounds(), { padding: [40, 40] }); return; }
         }
@@ -1204,6 +1230,7 @@ function trackListBox() {
         await DB.del("tracks", t.id);
         if (S.shownTracks.has(t.id)) S.map.removeLayer(S.shownTracks.get(t.id));
         S.shownTracks.delete(t.id);
+        rememberShownTracks();
         tracks = tracks.filter((x) => x !== t);
         render();
       };
@@ -1401,12 +1428,12 @@ function openList() {
       }
       const lead = selecting
         ? h("input", { type: "checkbox", class: "sel-cb", checked: sel.has(m.id), tabindex: "-1" })
-        : h("i", { style: `background:${catColor(m.category)}` });
+        : h("i", { style: `background:${memoColor(m)}` });
       const item = h("div", { class: "memo-item" + (selecting ? " selecting" : "") + (sel.has(m.id) ? " picked" : "") },
         lead,
         h("div", {},
-          h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${catColor(m.category)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
-          h("div", { class: "s" }, [m.category, fmtDate(m.createdAt), m.photoCount ? `写真${m.photoCount}` : "", m.audioCount ? `録音${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
+          h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${memoColor(m)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
+          h("div", { class: "s" }, [m.category, m.owner ? `記録：${m.owner}` : "", fmtDate(m.createdAt), m.photoCount ? `写真${m.photoCount}` : "", m.audioCount ? `録音${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
           m.note ? h("div", { class: "n" }, m.note) : null),
         dcell);
       item.onclick = (e) => {
@@ -1433,7 +1460,7 @@ function openList() {
   const syncTracks = () => (tracksBox.hidden = listState.view === "photos" || selecting);
   const render0 = render;
   render = () => { render0(); syncTracks(); };
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, list, tracksBox, bar), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "list-tools" }, colorBySeg(() => render())), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
@@ -1450,7 +1477,7 @@ function renderGallery(box, memos, allPhotos) {
   if (!items.length) return box.append(h("div", { class: "empty" }, "写真はまだありません。下の「撮影」ボタンで撮影できます。"));
   const grid = h("div", { class: "gal" });
   items.forEach((it, i) => {
-    const tile = h("button", { type: "button", class: "gal-tile" }, h("img", { src: thumbUrl(it.photo), alt: "", loading: "lazy" }), h("b", { style: `background:${catColor(it.memo.category)}` }, `#${it.memo.no ?? ""}`));
+    const tile = h("button", { type: "button", class: "gal-tile" }, h("img", { src: thumbUrl(it.photo), alt: "", loading: "lazy" }), h("b", { style: `background:${memoColor(it.memo)}` }, `#${it.memo.no ?? ""}`));
     tile.onclick = () => openViewer(items, i);
     grid.append(tile);
   });
@@ -1508,7 +1535,9 @@ async function toggleTrack() {
     $("#btn-track").classList.remove("recording");
     toast(`記録終了：${fmtDist(t.distance)}・${t.points.length}点`);
     S.shownTracks.set(t.id, S.trackLine);
+    S.trackLine.setStyle({ color: trackColor(t) });
     S.trackLine = null;
+    rememberShownTracks();
     return;
   }
   const t = { id: uuid(), name: `軌跡 ${fmtDate(nowIso())}`, startedAt: nowIso(), endedAt: null, points: [], distance: 0, project: Settings.data.project || null };
@@ -1531,8 +1560,16 @@ function addTrackPoint(p) {
     t.distance += d;
   }
   t.points.push([+p.lat.toFixed(7), +p.lon.toFixed(7), p.t, Math.round(p.acc), p.alt != null ? Math.round(p.alt * 10) / 10 : null]);
-  S.trackLine.addLatLng([p.lat, p.lon]);
-  if (++trackSaveCount % 5 === 0) DB.put("tracks", t).catch(() => {});
+  // 記録を再開したあとは線を分ける（止まっていた間はつながない）
+  const segs = t.segStarts && t.segStarts.length > 1;
+  if (segs) {
+    const lls = S.trackLine.getLatLngs(), arr = Array.isArray(lls[0]) ? lls : [lls];
+    if (t.segStarts[t.segStarts.length - 1] === t.points.length - 1 || !arr.length) arr.push([]);
+    arr[arr.length - 1].push(L.latLng(p.lat, p.lon));
+    S.trackLine.setLatLngs(arr);
+  } else S.trackLine.addLatLng([p.lat, p.lon]);
+  // 電源が急に切れても失われないよう、こまめに保存（5 秒に 1 回まで）
+  if (Date.now() - trackSaveCount > 5000) { trackSaveCount = Date.now(); DB.put("tracks", t).catch(() => {}); }
 }
 async function resumeTrackIfAny() {
   // 記録中にページが閉じられた軌跡は「終了扱い」にして残す
@@ -1804,7 +1841,9 @@ async function doExport(kind, mode, includePhotos) {
 }
 
 /** JSON / GeoJSON / ZIP（このアプリの書き出し）を読み込んで統合する */
+let importFileName = "";
 async function importFile(file) {
+  importFileName = file.name || "";
   const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   if (head[0] === 0x50 && head[1] === 0x4b) return importZip(file);
   const text = await file.text();
@@ -1917,8 +1956,9 @@ async function importGPX(text, filename = "") {
   let bounds = null;
   for (const id of r.ids) {
     const t = await DB.get("tracks", id);
-    const line = L.polyline(trackLatLngs(t), { color: "#7b1fa2", weight: 4, opacity: 0.8 }).addTo(S.map);
+    const line = L.polyline(trackLatLngs(t), { color: trackColor(t), weight: 4, opacity: 0.8 }).addTo(S.map);
     S.shownTracks.set(id, line);
+    rememberShownTracks();
     bounds = bounds ? bounds.extend(line.getBounds()) : L.latLngBounds(line.getBounds().getSouthWest(), line.getBounds().getNorthEast());
   }
   if (bounds) {
@@ -1958,15 +1998,29 @@ async function importData(data, getPhotoBlob) {
     }));
   }
   if (!Array.isArray(memos)) return alert("フィールドノートのデータではないようです");
+  // ほかの人のデータとして追加するか、自分のデータとして統合するか
+  const choice = await chooseImportMode({ ...data, memos }, importFileName);
+  if (!choice) return;
+  const asOther = choice.mode === "add", owner = choice.owner;
   let added = 0, updated = 0, skipped = 0, photos = 0;
   let no = nextNo();
+  const already = new Set([...S.memos.values()].filter((x) => x.owner === owner && x.srcId).map((x) => x.srcId));
   for (const raw of memos) {
     if (typeof raw.lat !== "number" || typeof raw.lon !== "number") { skipped++; continue; }
     const { photos: ph, audios: au, ...m } = raw;
+    if (asOther) {
+      // 新しいメモとして追加（元の ID は srcId に残し、同じファイルの二重取り込みを防ぐ）
+      const src = m.srcId || m.id || null;
+      if (src && already.has(src)) { skipped++; continue; }
+      m.srcId = src;
+      m.id = uuid();
+      m.owner = m.owner || owner;
+      m.no = no++;
+    }
     m.id = m.id || uuid();
     m.createdAt = m.createdAt || nowIso();
     m.updatedAt = m.updatedAt || m.createdAt;
-    const cur = S.memos.get(m.id);
+    const cur = asOther ? null : S.memos.get(m.id);
     if (cur && (cur.updatedAt || "") >= m.updatedAt) { skipped++; continue; }
     if (!cur && [...S.memos.values()].some((x) => x.no === m.no)) m.no = no++;
     if (m.no == null) m.no = no++;
@@ -1978,7 +2032,7 @@ async function importData(data, getPhotoBlob) {
           if (!blob) continue;
           // 書き出し済みの写真はそのまま保存（再圧縮しない）。サムネイルだけ作り直す
           const pr = await processPhoto(new File([blob], p.filename || "photo.jpg", { type: blob.type || p.mime || "image/jpeg" }), "original");
-          await DB.put("photos", { id: p.id || uuid(), memoId: m.id, order: i, ...pr, takenAt: p.takenAt || pr.takenAt, origName: p.origName || pr.origName });
+          await DB.put("photos", { id: (!asOther && p.id) || uuid(), memoId: m.id, order: i, ...pr, takenAt: p.takenAt || pr.takenAt, origName: p.origName || pr.origName });
           photos++;
         } catch {}
       }
@@ -1990,7 +2044,7 @@ async function importData(data, getPhotoBlob) {
         try {
           const blob = (await getPhotoBlob({ file: a.file, mime: a.mime })) || (a.dataUrl ? await (await fetch(a.dataUrl)).blob() : null);
           if (!blob) continue;
-          await DB.put("audios", { id: a.id || uuid(), memoId: m.id, blob: new Blob([blob], { type: a.mime || blob.type }), mime: a.mime || blob.type, duration: a.duration || 0, createdAt: a.createdAt || m.createdAt });
+          await DB.put("audios", { id: (!asOther && a.id) || uuid(), memoId: m.id, blob: new Blob([blob], { type: a.mime || blob.type }), mime: a.mime || blob.type, duration: a.duration || 0, createdAt: a.createdAt || m.createdAt });
         } catch {}
       }
       m.audioCount = (await DB.byIndex("audios", "memoId", m.id)).length;
@@ -2002,11 +2056,23 @@ async function importData(data, getPhotoBlob) {
   if (Array.isArray(data.tracks)) {
     for (const t of data.tracks) {
       if (!t.id || !Array.isArray(t.points)) continue;
-      if (await DB.get("tracks", t.id)) continue;
       const { pointFields, ...rest } = t;
+      if (asOther) {
+        const src = rest.srcId || rest.id;
+        if ((await DB.all("tracks")).some((x) => x.owner === owner && x.srcId === src)) continue;
+        Object.assign(rest, { srcId: src, id: uuid(), owner: rest.owner || owner, name: `${rest.name}（${owner}）` });
+      } else if (await DB.get("tracks", t.id)) continue;
       await DB.put("tracks", rest);
       tAdded++;
+      if (asOther) { const line = L.polyline(trackLatLngs(rest), { color: trackColor(rest), weight: 4, opacity: 0.8 }).addTo(S.map); S.shownTracks.set(rest.id, line); }
     }
+  }
+  if (asOther) {
+    rememberShownTracks();
+    // ほかの人のデータを入れたら、記録者別の色にする（一覧・設定で戻せる）
+    if (added && colorBy() !== "owner") { Settings.data.colorBy = "owner"; Settings.save(); }
+    ownerColor(selfName());
+    ownerColor(owner);
   }
   if (data.project && !Settings.data.project && data.project.name) {
     Settings.data.project = data.project.name;
@@ -2014,7 +2080,8 @@ async function importData(data, getPhotoBlob) {
   }
   const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
   await loadMemos();
-  alert(`読み込み完了\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}`);
+  if (typeof dataLegendUpdate === "function") dataLegendUpdate();
+  alert(`読み込み完了${asOther ? `（${owner} さんのデータとして追加）` : ""}\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped}${asOther ? "（取り込み済み）" : ""} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}`);
 }
 
 /* ====================================================================
@@ -2236,6 +2303,9 @@ async function openMenu() {
         h("label", {}, "調査名", proj),
         h("label", {}, "記録者", obs)),
       sec("カテゴリ", "名前・色・並び順を変えられます（すぐ反映）", cats),
+      sec("ピンの色", "カテゴリ別か、記録者（ほかの人から取り込んだデータ）別か", colorBySeg()),
+      sec("GPS・方位の補正", "必要なときだけ。現在地ボタンの長押しでも開けます", h("button", { class: "btn secondary block", type: "button", onclick: openGpsCalib }, "補正の設定を開く"),
+        h("div", { class: "msec-meta" }, (() => { const g = gpsCfg(); return [g.offset ? `位置の補正：北 ${g.offset.n} m・東 ${g.offset.e} m` : "", g.avgSec ? `平均化 ${g.avgSec} 秒` : "", g.maxAcc ? `±${g.maxAcc} m より悪い測位は使わない` : "", g.compass ? `方位 ${g.compass > 0 ? "+" : ""}${g.compass}°` : ""].filter(Boolean).join("・") || "補正なし"; })())),
       sec("写真・聞き取り", null,
         h("label", {}, "写真の保存サイズ（端末内）", psize),
         h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
@@ -2581,6 +2651,16 @@ function bindUI() {
     copyText(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`);
   };
   $("#status").title = "タップで座標をコピー";
+  // 画面が隠れる・閉じられるときに記録中の軌跡を保存（電池切れ・アプリの切り替え対策）
+  const flushTrack = () => { if (S.track) DB.put("tracks", S.track).catch(() => {}); };
+  document.addEventListener("visibilitychange", () => { if (document.hidden) flushTrack(); });
+  window.addEventListener("pagehide", flushTrack);
+  // 現在地ボタンの長押しで GPS・方位の補正
+  let lp = 0;
+  $("#btn-locate").addEventListener("pointerdown", () => { lp = setTimeout(() => { lp = -1; openGpsCalib(); }, 650); });
+  $("#btn-locate").addEventListener("pointerup", () => clearTimeout(lp));
+  $("#btn-locate").addEventListener("pointerleave", () => clearTimeout(lp));
+  $("#btn-locate").addEventListener("click", (e) => { if (lp === -1) { e.stopImmediatePropagation(); lp = 0; } }, true);
   window.addEventListener("beforeunload", (e) => {
     if (S.track) {
       DB.put("tracks", S.track);
@@ -2599,7 +2679,7 @@ async function main() {
   extraRestore();
   startSun();
   try {
-    await resumeTrackIfAny();
+    await restoreTracksOnStart();
     await loadMemos();
     await loadPdfLayers();
   } catch (e) {

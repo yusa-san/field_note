@@ -280,20 +280,28 @@ async function makeCompareLayer(c, pane) {
 function compareClip() {
   if (!CMP.on) return;
   const size = S.map.getSize(), x = Math.round(size.x * CMP.x);
-  const nw = S.map.containerPointToLayerPoint([0, 0]), se = S.map.containerPointToLayerPoint(size);
-  const cx = nw.x + x;
-  S.map.getPane("cmpA").style.clip = `rect(${nw.y}px, ${cx}px, ${se.y}px, ${nw.x}px)`;
-  S.map.getPane("cmpB").style.clip = `rect(${nw.y}px, ${se.x}px, ${se.y}px, ${cx}px)`;
+  // 面の座標で画面の左上・右下を求める（回転する面と、回転しない面で計算が違う）
+  const corners = (pn) => {
+    if (pn.endsWith("gl")) { const o = S.map._getMapPanePos(); return [L.point(-o.x, -o.y), L.point(size.x - o.x, size.y - o.y)]; }
+    return [S.map.containerPointToLayerPoint([0, 0]), S.map.containerPointToLayerPoint(size)];
+  };
+  const [a0, a1] = corners(CMP.pa), [b0, b1] = corners(CMP.pb);
+  S.map.getPane(CMP.pa).style.clip = `rect(${a0.y}px, ${a0.x + x}px, ${a1.y}px, ${a0.x}px)`;
+  S.map.getPane(CMP.pb).style.clip = `rect(${b0.y}px, ${b1.x}px, ${b1.y}px, ${b0.x + x}px)`;
   CMP.bar.style.left = x + "px";
 }
 async function startCompare(keyA, keyB) {
   stopCompare();
   const cands = compareCandidates(), A = cands.find((c) => c.key === keyA), B = cands.find((c) => c.key === keyB);
   if (!A || !B) return;
-  for (const [p, z] of [["cmpA", 260], ["cmpB", 261]]) { const pane = S.map.getPane(p) || S.map.createPane(p); pane.style.zIndex = z; pane.style.pointerEvents = "none"; }
+  // 比べている間は北を上に固定（境目は画面の縦線）
+  if (S.map.setBearing) { S.map.setBearing(0); S.map.touchRotate?.disable(); }
+  // 画像タイルは回転する面、WebGL（地理院 Vector）は回転しない面に入れる
+  const paneFor = (c, n) => (c.def.vector ? (mapPaneAt(n + "gl", 400 + (n === "cmpB" ? 1 : 0), true), n + "gl") : (rotPaneAt(n, n === "cmpB" ? 261 : 260), n));
+  CMP.pa = paneFor(A, "cmpA"); CMP.pb = paneFor(B, "cmpB");
   try {
-    CMP.a = (await makeCompareLayer(A, "cmpA")).addTo(S.map);
-    CMP.b = (await makeCompareLayer(B, "cmpB")).addTo(S.map);
+    CMP.a = (await makeCompareLayer(A, CMP.pa)).addTo(S.map);
+    CMP.b = (await makeCompareLayer(B, CMP.pb)).addTo(S.map);
   } catch (e) { stopCompare(); return toast("表示できません：" + e.message, 4000); }
   CMP.on = true;
   Settings.data.compare = { a: keyA, b: keyB };
@@ -322,7 +330,8 @@ function stopCompare() {
   CMP.bar?.remove(); CMP.info?.remove();
   CMP.bar = CMP.info = null;
   if (CMP.on) S.map.off("move zoom resize zoomend", compareClip);
-  for (const p of ["cmpA", "cmpB"]) { const pane = S.map.getPane(p); if (pane) pane.style.clip = ""; }
+  for (const p of ["cmpA", "cmpB", "cmpAgl", "cmpBgl"]) { const pane = S.map.getPane(p); if (pane) pane.style.clip = ""; }
+  if (CMP.on) S.map.touchRotate?.enable();
   CMP.on = false;
 }
 function openCompareSheet() {
