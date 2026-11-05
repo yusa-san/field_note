@@ -18,7 +18,7 @@ const PR_DEFAULT = {
 const PR_MAX_AREA = 14e6;     // スマホの canvas 上限より少し小さく
 const PR_MAX_TILES = 900;     // 1 レイヤで読み込むタイルの上限
 const EARTH_C = 40075016.686; // メルカトルの赤道一周 (m)
-const PR_FONT = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif';
+const PR_FONT = '"BIZ UDPGothic", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif';
 
 const prCfg = () => ({ ...PR_DEFAULT, ...(Settings.data.print || {}) });
 function prSave(patch) {
@@ -719,6 +719,11 @@ function prWrap(ctx, text, maxW, n) {
 
 /** 1 ページ分の画像を作る */
 async function prRender(cfg, ext, onProgress = () => {}) {
+  // 画面と同じフォント（BIZ UDPゴシック）で描けるよう、使う文字の分だけ先に読み込む（オフラインなどで取れなければ代わりのフォント）
+  try {
+    const txt = "0123456789#()（）・：、。凡例出典縮尺軌跡記録中北" + (cfg.title || "") + [...S.memos.values()].map((m) => `${m.title || ""}${m.category || ""}${m.owner || ""}`).join("").slice(0, 4000);
+    await Promise.race([Promise.all(["400", "700"].map((w) => document.fonts.load(`${w} 16px "BIZ UDPGothic"`, txt))), new Promise((r) => setTimeout(r, 4000))]);
+  } catch {}
   const L0 = ext.layout;
   let dpi = cfg.dpi;
   const maxDpi = Math.sqrt(PR_MAX_AREA / (L0.pw * L0.ph)) * 25.4;

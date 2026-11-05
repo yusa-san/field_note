@@ -4,14 +4,15 @@
  *   ふつうに取るとリロードしても古い app.js が出る。必ずサーバーに確かめる（no-cache：変わっていなければ 304 で軽い）
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v30";
+const VERSION = "v31";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの
+const FONTS = "fn-fonts"; // Google Fonts（BIZ UDPゴシック）：一度読んだ文字の分は端末に残す（版が変わっても消さない）
 const RT_MAX = 4000;
 
 const SHELL_FILES = [
-  "./", "index.html", "style.css", "vector.js", "dem.js", "reinfo-catalog.js", "datalayers.js", "estat-gis-catalog.js", "estatgis.js", "boundary.js", "importlayers.js", "georef.js", "print.js", "fieldtools.js", "extra-data.js", "extralayers.js", "survey.js", "memo-tools.js", "cluster.js", "asr-worker.js", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+  "./", "index.html", "style.css", "vector.js", "dem.js", "reinfo-catalog.js", "datalayers.js", "estat-gis-catalog.js", "estatgis.js", "boundary.js", "importlayers.js", "georef.js", "print.js", "fieldtools.js", "extra-data.js", "extralayers.js", "survey.js", "memo-tools.js", "cluster.js", "guide.js", "i18n.js", "i18n-en.js", "asr-worker.js", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
   "https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate.js",
@@ -121,6 +122,15 @@ self.addEventListener("fetch", (e) => {
   if (url.pathname.includes("/reinfolib/") || url.hostname === "geoshape.ex.nii.ac.jp") return e.respondWith(tileResponse(req));
   if (TILE_HOSTS.includes(url.hostname)) return e.respondWith(tileResponse(req));
   if (url.origin === self.location.origin) return e.respondWith(shellResponse(req));
+  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
+    // フォント：キャッシュ優先（CSS は裏で更新）
+    return e.respondWith(caches.open(FONTS).then(async (c) => {
+      const hit = await c.match(req);
+      const net = fetch(req).then((res) => { if (res.ok || res.type === "opaque") c.put(req, res.clone()); return res; });
+      if (hit) { if (url.hostname === "fonts.googleapis.com") net.catch(() => {}); return hit; }
+      return net;
+    }).catch(() => fetch(req)));
+  }
   if (url.hostname === "unpkg.com" || url.hostname === "cdn.jsdelivr.net" || url.hostname === "gsi-cyberjapan.github.io" || url.href.endsWith("/js/muni.js")) {
     // CDN の固定バージョン：キャッシュ優先
     e.respondWith(caches.match(req, { ignoreVary: true }).then((hit) => hit || fetch(req).then((res) => {
