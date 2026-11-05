@@ -720,3 +720,5 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #v-play .i-pause { display: none; }
 #v-play.on .i-play { display: none; }
 #v-play.on .i-pause { display: block; }
+.photo-pins-seg { align-items: stretch; flex: 1; }
+.photo-pins-seg .seg-lab { display: flex; align-items: center; padding: 0 10px; font-size: 12.5px; color: var(--fg-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }

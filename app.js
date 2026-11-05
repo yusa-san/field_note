@@ -832,7 +832,7 @@ function renderMarker(m) {
       className: "photo-pin feat", iconSize: [fw, fh], iconAnchor: [fw / 2, fh + 10], popupAnchor: [0, -fh - 8],
       html: `<div class="pp" style="border-color:${color};width:${fw}px;height:${fh}px"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
     })
-    : ph && S.thumbMode
+    : ph && S.thumbMode && !(Settings.data.photoPinsFavOnly && !m.featured) // 「地図の写真：お気に入りだけ」のときは、ほかは小さいピン
     ? L.divIcon({
       className: "photo-pin", iconSize: [48, 48], iconAnchor: [24, 58], popupAnchor: [0, -56],
       html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
@@ -1503,10 +1503,32 @@ function openList() {
     if (!shown.length) return toast("見返すメモがありません");
     openPlayback(shown, { photosOnly: listState.view === "photos", resume: true });
   } }, "見返す");
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "list-tools" }, colorBySeg(() => render())), list, tracksBox, bar), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "list-tools" }, colorBySeg(() => render())), h("div", { class: "list-tools" }, photoPinsSeg()), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
+}
+/** 地図の写真（サムネイル）を、すべてのメモに出すか、お気に入りだけにするか */
+function photoPinsSeg() {
+  const fav = () => !!Settings.data.photoPinsFavOnly;
+  const n = () => [...S.memos.values()].filter((m) => m.featured && m.photoCount).length;
+  const seg = h("div", { class: "seg seg-sm photo-pins-seg" });
+  const draw = () => seg.replaceChildren(
+    h("span", { class: "seg-lab" }, "地図の写真"),
+    ...[[false, "すべて"], [true, `お気に入りだけ（${n()}）`]].map(([v, t]) => {
+      const b = h("button", { type: "button", class: fav() === v ? "on" : "", "aria-pressed": fav() === v ? "true" : "false" }, t);
+      b.onclick = () => {
+        if (fav() === v) return;
+        Settings.data.photoPinsFavOnly = v;
+        Settings.save();
+        for (const m of S.memos.values()) if (S.memoThumb.has(m.id)) renderMarker(m);
+        draw();
+        toast(v ? (n() ? "地図の写真をお気に入りだけにしました（ほかは小さいピン）" : "お気に入りはまだありません。見返す画面やメモの画面で付けられます") : "地図の写真をすべて表示します", 2600);
+      };
+      return b;
+    }));
+  draw();
+  return seg;
 }
 function renderGallery(box, memos, allPhotos) {
   if (!allPhotos) return box.append(h("div", { class: "empty" }, "読み込み中…"));
