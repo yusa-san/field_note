@@ -722,3 +722,8 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #v-play.on .i-pause { display: block; }
 .photo-pins-seg { align-items: stretch; flex: 1; }
 .photo-pins-seg .seg-lab { display: flex; align-items: center; padding: 0 10px; font-size: 12.5px; color: var(--fg-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }
+/* まとめたピン */
+.cl-pin { background: none; border: 0; }
+.cl-pin div { border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 3px rgba(0, 0, 0, .12), 0 2px 6px rgba(0, 0, 0, .45); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cl-photo .cl-stack { box-shadow: 4px -4px 0 -1px #fff, 4px -4px 0 1px rgba(0, 0, 0, .25), 0 1px 5px rgba(0, 0, 0, .5); }
+.cl-photo .cl-n { left: auto !important; right: -10px; top: -10px !important; min-width: 22px; height: 22px; line-height: 18px; font-size: 11.5px; }

@@ -791,7 +791,13 @@ async function loadMemos() {
   }
   for (const mk of S.markers.values()) S.map.removeLayer(mk);
   S.markers.clear();
+  // ピンをまとめるときは、先に全部を地図に置かない（置いてから外すと、数百件で重くなる）
+  CL.batch = true;
+  CL.on = clActive();
+  CL.visible = new Set();
   for (const m of S.memos.values()) renderMarker(m);
+  CL.batch = false;
+  clUpdate();
   updateCounts();
 }
 async function refreshMemoThumb(id) {
@@ -841,7 +847,9 @@ function renderMarker(m) {
       className: "memo-pin", iconSize: [26, 26], iconAnchor: [13, 30], popupAnchor: [0, -28],
       html: `<div style="background:${color}"><span>${m.no ?? ""}</span></div>`,
     });
-  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: feat ? 500 + feat * 100 : ph ? 100 : 0 }).addTo(S.map);
+  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: feat ? 500 + feat * 100 : ph ? 100 : 0 });
+  mk._fnMemoId = m.id;
+  if (clShows(m.id)) mk.addTo(S.map); // まとめて隠しているピンは置かない
   mk.bindPopup("", { maxWidth: 260, autoPanPaddingTopLeft: [10, 110], autoPanPaddingBottomRight: [60, 90] });
   mk.on("popupopen", (e) => {
     const cur = S.memos.get(m.id) || m;
@@ -857,6 +865,7 @@ function renderMarker(m) {
     loadPopupAudio(cur, el, e.popup);
   });
   S.markers.set(m.id, mk);
+  clSchedule();
   if (PIN.on) enablePinDrag(m.id, mk);
   if (SH.on) shiftHookMarker(m.id, mk);
 }
@@ -1213,6 +1222,7 @@ async function deleteMemo(id) {
   const mk = S.markers.get(id);
   if (mk) S.map.removeLayer(mk);
   S.markers.delete(id);
+  clSchedule();
   updateCounts();
 }
 
@@ -1409,6 +1419,7 @@ function openList() {
     else S.map.fitBounds(L.latLngBounds(ms.map((m) => [m.lat, m.lon])), { padding: [60, 60], maxZoom: 18 });
     // 選んだメモを数秒だけ目立たせる
     setTimeout(() => {
+      clForce(ms.map((m) => m.id), 5200); // まとめていても、選んだメモは出す
       for (const m of ms) S.markers.get(m.id)?.getElement()?.classList.add("hl");
       setTimeout(() => { for (const m of ms) S.markers.get(m.id)?.getElement()?.classList.remove("hl"); }, 5000);
     }, 400);
@@ -2448,6 +2459,7 @@ async function openMenu() {
         h("label", {}, "記録者", obs)),
       sec("カテゴリ", "名前・色・並び順を変えられます（すぐ反映）", cats),
       sec("ピンの色", "カテゴリ別か、記録者（ほかの人から取り込んだデータ）別か", colorBySeg()),
+      sec("重なるピンをまとめる", `引きの地図（ズーム ${CL_MAX_ZOOM} 未満）で、重なるピンを件数の丸にまとめて地図を軽くします。押すとその範囲へ拡大`, clusterSeg()),
       sec("GPS・方位の補正", "必要なときだけ。現在地ボタンの長押しでも開けます", h("button", { class: "btn secondary block", type: "button", onclick: openGpsCalib }, "補正の設定を開く"),
         h("div", { class: "msec-meta" }, (() => { const g = gpsCfg(); return [g.offset ? `位置の補正：北 ${g.offset.n} m・東 ${g.offset.e} m` : "", g.avgSec ? `平均化 ${g.avgSec} 秒` : "", g.maxAcc ? `±${g.maxAcc} m より悪い測位は使わない` : "", g.compass ? `方位 ${g.compass > 0 ? "+" : ""}${g.compass}°` : ""].filter(Boolean).join("・") || "補正なし"; })())),
       sec("写真・聞き取り", null,
@@ -3164,6 +3176,7 @@ async function main() {
   Settings.load();
   bindUI();
   moveToFirstFix = initMap();
+  setupCluster(); // メモが多いとき、引きの地図で重なるピンをまとめる
   demRestore();
   dataRestore();
   extraRestore();
