@@ -2,6 +2,7 @@
  *
  * - /reinfolib/XKT002?response_format=pbf&z=..&x=..&y=..  → 不動産情報ライブラリ API（API キーを付けて中継）
  * - /estat/getStatsList?... など                          → e-Stat API（appId を付けて中継）
+ * - /estatgis/data?statsId=..&code=..&downloadType=2       → e-Stat「地図で見る統計」の町丁・字／メッシュ統計と境界（キー不要）
  *
  * API キーはこのサーバの「シークレット」に置くので、ブラウザ（公開されたアプリ）には出ません。
  * 結果は Cloudflare のキャッシュに 1 日（タイル）残すので、2 回目以降は速く、API への問い合わせも減ります。
@@ -13,6 +14,9 @@
  */
 const REINFO = "https://www.reinfolib.mlit.go.jp/ex-api/external/";
 const ESTAT = "https://api.e-stat.go.jp/rest/3.0/app/json/";
+const ESTAT_GIS = "https://www.e-stat.go.jp/gis/statmap-search/data";
+// 統計GIS のダウンロードで使ってよいパラメータ（それ以外は捨てる）
+const GIS_PARAMS = { statsId: /^T\d{6}$/, code: /^\d{2,5}$/, downloadType: /^[25]$/, dlserveyId: /^[A-Z]\d{12}$/, coordSys: /^[12]$/, format: /^(shape|gml)$/, datum: /^(2000|2011)$/ };
 
 const json = (o, status, cors) => new Response(JSON.stringify(o, null, 1), { status, headers: { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 
@@ -26,6 +30,7 @@ export default {
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Max-Age": "86400",
+      "Access-Control-Expose-Headers": "X-Upstream-Date",
       Vary: "Origin",
     };
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
@@ -50,13 +55,15 @@ export default {
         secrets: { REINFOLIB_KEY: !!env.REINFOLIB_KEY, ESTAT_APPID: !!env.ESTAT_APPID, ALLOWED_ORIGINS: env.ALLOWED_ORIGINS || "(未設定)" },
         reinfolib: env.REINFOLIB_KEY ? await probe(REINFO + "XKT002?response_format=geojson&z=14&x=14549&y=6452", { "Ocp-Apim-Subscription-Key": env.REINFOLIB_KEY }) : "REINFOLIB_KEY 未設定",
         estat: env.ESTAT_APPID ? await probe(ESTAT + "getStatsList?limit=1&appId=" + encodeURIComponent(env.ESTAT_APPID)) : "ESTAT_APPID 未設定",
+        estatgis: await probe(ESTAT_GIS + "?statsId=T001081&code=13101&downloadType=2").then((r) => ({ ...r, body: undefined, zip: r.body ? r.body.startsWith("PK") : false })),
       }, 200, cors);
     }
-    let target, headers = {}, ttl;
+    let target, headers = {}, ttl, api;
     let m;
     if ((m = url.pathname.match(/^\/reinfolib\/(X[A-Z]{2}\d{3})$/))) {
       if (!env.REINFOLIB_KEY) return new Response("REINFOLIB_KEY is not set", { status: 500, headers: cors });
       target = REINFO + m[1] + url.search;
+      api = m[1];
       headers["Ocp-Apim-Subscription-Key"] = env.REINFOLIB_KEY;
       ttl = 86400;
     } else if ((m = url.pathname.match(/^\/estat\/(get[A-Za-z]+)$/))) {
@@ -66,15 +73,29 @@ export default {
         q.set("appId", env.ESTAT_APPID);
       }
       target = ESTAT + m[1] + "?" + q;
+      api = m[1];
       ttl = 3600;
+    } else if (url.pathname === "/estatgis/data") {
+      const q = new URLSearchParams();
+      for (const [k, re] of Object.entries(GIS_PARAMS)) {
+        const v = url.searchParams.get(k);
+        if (v && re.test(v)) q.set(k, v);
+      }
+      if (!q.get("downloadType") || !(q.get("statsId") || q.get("dlserveyId")) || !q.get("code")) return new Response("bad request", { status: 400, headers: cors });
+      target = ESTAT_GIS + "?" + q;
+      api = "estatgis";
+      ttl = 30 * 86400; // 統計は確定値なので長めに残す
     } else {
       return new Response("not found", { status: 404, headers: cors });
     }
 
-    // Cloudflare のキャッシュ（キーは API キーを含まない元の URL）
+    // Cloudflare のキャッシュ（キーは API キーを含まない元の URL。fresh=1 は「キャッシュを使わず取り直す」の印なのでキーから除く）
+    const fresh = url.searchParams.get("fresh") === "1";
+    const keyUrl = new URL(url);
+    keyUrl.searchParams.delete("fresh");
     const cache = caches.default;
-    const cacheKey = new Request(url.toString(), { method: "GET" });
-    let res = await cache.match(cacheKey);
+    const cacheKey = new Request(keyUrl.toString(), { method: "GET" });
+    let res = fresh ? null : await cache.match(cacheKey);
     if (!res) {
       let up;
       try {
@@ -82,14 +103,18 @@ export default {
         // 大きな統計表の取得はさらに時間がかかるので 100 秒）。User-Agent は明示する（付けないと拒否するサーバがある）
         up = await fetch(target, {
           headers: { ...headers, "User-Agent": "fieldnote-proxy/1.0 (+https://github.com/yusa-san/field_note)", Accept: "application/json, */*" },
-          signal: AbortSignal.timeout(url.pathname.startsWith("/estat/") ? 100000 : 25000),
+          signal: AbortSignal.timeout(url.pathname.startsWith("/estat") ? 100000 : 25000),
           cf: { cacheTtl: ttl, cacheEverything: true },
         });
       } catch (e) {
-        return json({ error: "upstream fetch failed", api: m[1], message: String(e && e.message || e) }, 502, cors);
+        return json({ error: "upstream fetch failed", api, message: String(e && e.message || e) }, 502, cors);
       }
       // e-Stat はエラーでも HTTP 200 で返すので、中身を見てエラーはキャッシュしない
       let ok = up.ok, body = up.body;
+      // 統計GIS は、データがない地域だと HTML の 404 を返す
+      if (api === "estatgis" && (!up.ok || !/octet-stream|zip/.test(up.headers.get("Content-Type") || ""))) {
+        return new Response("no data (estatgis)", { status: 404, headers: { ...cors, "Cache-Control": "no-store" } });
+      }
       if (url.pathname.startsWith("/estat/")) {
         const text = await up.text();
         const st = Number((text.match(/"STATUS"\s*:\s*"?(\d+)/) || [])[1] ?? 0);
@@ -98,6 +123,7 @@ export default {
       }
       res = new Response(body, up);
       res.headers.set("Cache-Control", ok ? `public, max-age=${ttl}` : "no-store");
+      res.headers.set("X-Upstream-Date", new Date().toISOString()); // e-Stat などから取った日時（キャッシュから返すときもこの日時のまま）
       if (ok) ctx.waitUntil(cache.put(cacheKey, res.clone()).catch(() => {}));
     }
     const out = new Response(res.body, res);

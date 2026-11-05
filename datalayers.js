@@ -94,7 +94,7 @@ function ovlOrder() {
   const m = OVL.map;
   if (!m) return;
   const ids = m.getStyle().layers.map((l) => l.id);
-  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : id.startsWith("im-") ? 3 : 2);
+  const rank = (id) => (id.startsWith("es-") ? 0 : id.startsWith("ri-") ? 1 : id.startsWith("im-") ? 3 : id.startsWith("bd-") ? 4 : 2);
   const sorted = [...ids].sort((a, b) => rank(a) - rank(b) || ids.indexOf(a) - ids.indexOf(b));
   for (const id of sorted) m.moveLayer(id);
 }
@@ -441,6 +441,7 @@ function estatColorExpr(lay) {
 }
 /** 1 つの e-Stat レイヤの地物を作る（値＋形） */
 async function estatBuild(lay) {
+  if (lay.src === "gis") return esgBuild(lay); // 町丁・字／地域メッシュ（estatgis.js）
   const values = lay.values || (await estatFetchValues(lay));
   const byArea = new Map();
   for (const v of values) byArea.set(v.area, v);
@@ -507,13 +508,14 @@ async function estatApplyAll() {
  * ==================================================================== */
 async function dataRestore() {
   await imLoadAll();
-  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on) || IMP.list.some((l) => l.on);
+  const any = greenCfg().on || Object.values(reinfoCfg().layers).some((l) => l.on) || estatCfg().layers.some((l) => l.on) || IMP.list.some((l) => l.on) || bdCfg().city || bdCfg().town;
   if (!any) return;
   try {
     await greenApply();
     await reinfoApplyAll();
     await estatApplyAll();
     await imApplyAll();
+    await bdApply();
   } catch (e) {
     console.warn("データの重ね合わせを復元できません", e);
   }
@@ -575,6 +577,10 @@ function dataLegendGroups(filterKeys) {
     }
     out.push({ key: "data:es:" + lay.id, title: `${lay.title}${lay.unit ? `（${lay.unit}）` : ""}`, items });
   }
+  const bc = bdCfg();
+  if ((bc.city || bc.town) && (!filterKeys || filterKeys.includes("data:bd"))) {
+    out.push({ key: "data:bd", title: "境界", items: [bc.city && { color: BD_CITY_COLOR, text: "市区町村界（都府県界は太線）", kind: "line" }, bc.town && { color: BD_TOWN_COLOR, text: `町丁・字界（${bdTownYear()} 年国勢調査）`, kind: "line" }].filter(Boolean) });
+  }
   return out.concat(imLegendGroups(filterKeys));
 }
 const fmtNum = (v) => (v == null || !Number.isFinite(v) ? "—" : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("ja-JP") : String(+v.toPrecision(3)));
@@ -608,9 +614,14 @@ function dataLayerClick(latlng) {
   if (!m) return false;
   const p = m.project([latlng.lng, latlng.lat]);
   const ids = m.getStyle().layers.map((l) => l.id).filter((id) => /^(gr|ri|es|im)-/.test(id));
-  if (!ids.length) return false;
+  // 境界は面の中の 1 点で引く（境目の近くで隣の地域まで拾わないように）。町丁・字 → 市区町村の順
+  const bdIds = ["bd-town-area", "bd-city-area"].filter((id) => m.getLayer(id));
+  if (!ids.length && !bdIds.length) return false;
   let feats = [];
-  try { feats = m.queryRenderedFeatures([[p.x - 7, p.y - 7], [p.x + 7, p.y + 7]], { layers: ids }); } catch { return false; }
+  try {
+    if (ids.length) feats = m.queryRenderedFeatures([[p.x - 7, p.y - 7], [p.x + 7, p.y + 7]], { layers: ids });
+    for (const id of bdIds) feats.push(...m.queryRenderedFeatures(p, { layers: [id] }).slice(0, 1));
+  } catch { return false; }
   if (!feats.length) return false;
   const seen = new Set(), blocks = [];
   for (const f of feats) {
@@ -620,7 +631,9 @@ function dataLayerClick(latlng) {
     if (blocks.length >= 4) break;
     const pr = f.properties || {};
     let title, rows;
-    if (f.layer.id.startsWith("gr-")) {
+    if (f.layer.id.startsWith("bd-")) {
+      ({ title, rows } = bdClickRows(f));
+    } else if (f.layer.id.startsWith("gr-")) {
       const g = GREEN_GROUPS.find((x) => f.layer.id.startsWith(`gr-${x.id}-`));
       title = `${pr._k || ""}`;
       rows = Object.entries(pr).filter(([k]) => !k.startsWith("_")).map(([k, v]) => [k, v]);
@@ -654,6 +667,7 @@ function dataPrintCandidates() {
   for (const [id, lc] of Object.entries(reinfoCfg().layers)) if (lc.on && OVL.map?.getSource(`ri-${id}`)) out.push({ key: "data:ri:" + id, name: reinfoApi(id).name, kind: "data" });
   for (const lay of estatCfg().layers) if (lay.on && OVL.map?.getSource(`es-${lay.id}`)) out.push({ key: "data:es:" + lay.id, name: `e-Stat：${lay.title}`, kind: "data" });
   for (const rec of IMP.list) if (rec.on && OVL.map?.getSource(`im-${rec.id}`)) out.push({ key: "data:im:" + rec.id, name: `ファイル：${rec.name}`, kind: "data" });
+  if (OVL.map?.getLayer("bd-city-line") || OVL.map?.getLayer("bd-town-line")) out.push({ key: "data:bd", name: "境界（市区町村界・町丁・字界）", kind: "data" });
   return out;
 }
 /** 印刷用：選んだキーのレイヤだけを含むスタイル */
@@ -662,7 +676,8 @@ function dataPrintStyle(keys) {
   const keep = (id) => (id.startsWith("gr-") && keys.includes("data:green"))
     || (id.startsWith("ri-") && keys.includes("data:ri:" + id.split("-")[1]))
     || (id.startsWith("es-") && keys.includes("data:es:" + id.split("-")[1]))
-    || (id.startsWith("im-") && keys.includes("data:im:" + id.split("-")[1]));
+    || (id.startsWith("im-") && keys.includes("data:im:" + id.split("-")[1]))
+    || (id.startsWith("bd-") && !id.endsWith("-area") && keys.includes("data:bd"));
   const layers = st.layers.filter((l) => keep(l.id));
   const used = new Set(layers.map((l) => l.source));
   const sources = Object.fromEntries(Object.entries(st.sources).filter(([k]) => used.has(k)));
@@ -673,6 +688,7 @@ function dataCredits(keys) {
   if (keys.includes("data:green")) c.push(GREEN_ATTR + "（CC BY 4.0）");
   if (keys.some((k) => k.startsWith("data:ri:"))) c.push("不動産情報ライブラリ（国土交通省）");
   if (keys.some((k) => k.startsWith("data:es:"))) c.push("政府統計の総合窓口（e-Stat）・Geoshape 市区町村界（CODH, 国土数値情報 行政区域を加工）");
+  if (keys.includes("data:bd")) c.push([bdCfg().city && "行政界：国土地理院・Geoshape 市区町村界（CODH）", bdCfg().town && `町丁・字界：e-Stat 国勢調査 小地域境界（${bdTownYear()} 年）`].filter(Boolean).join("・"));
   const im = IMP.list.filter((r) => keys.includes("data:im:" + r.id));
   if (im.some((r) => r.kind === "fgd")) c.push("基盤地図情報（国土地理院）");
   const other = im.filter((r) => r.kind !== "fgd");
@@ -703,6 +719,8 @@ function dataPanelRow() {
     h("div", { class: "menu-grid", style: "margin-top:6px" },
       h("button", { type: "button", class: "btn secondary", onclick: openReinfoSheet }, `不動産情報ライブラリ${nRi ? `（${nRi}）` : ""}`),
       h("button", { type: "button", class: "btn secondary", onclick: openEstatSheet }, `e-Stat 統計${nEs ? `（${nEs}）` : ""}`)),
+    h("div", { class: "lbl-plain", style: "margin-top:12px;font-weight:700" }, "境界"),
+    bdPanel(),
     h("div", { class: "lbl-plain", style: "margin-top:12px;font-weight:700" }, "ファイルから（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
     imPanel());
 }
@@ -821,12 +839,41 @@ function openEstatSheet() {
       ramp.onchange = () => { const l = upd({ ramp: ramp.value }); if (l.on) estatApplyOne(l); };
       const d = ES.data[lay.id];
       layersBox.append(h("div", { class: "ri-row" },
-        h("div", { class: "ov-row" }, cb, h("div", {}, lay.title, h("small", {}, [lay.selText, d ? `${d.matched} 地域` : ""].filter(Boolean).join("・"))), rg),
+        h("div", { class: "ov-row" }, cb, h("div", {}, lay.title, h("small", {}, [lay.selText, d ? `${d.matched} 地域` : ""].filter(Boolean).join("・")),
+          lay.src === "gis" ? h("small", { class: "esg-fresh" + (esgStale(lay) ? " old" : "") }, esgFreshText(lay)) : ""), rg),
         h("div", { class: "chips" }, h("label", { class: "inline", style: "margin:0" }, "色 ", ramp),
-          h("button", { type: "button", class: "chip", onclick: async () => { ES.data[lay.id] = null; const l = upd({ values: null }); try { await estatApplyOne(l); toast("取り直しました"); } catch (e) { toast(e.message, 4000); } } }, "取り直す"),
+          lay.src === "gis"
+            ? h("button", { type: "button", class: "chip", onclick: async () => {
+              // 今見ている範囲の市区町村・メッシュで作り直す
+              try {
+                const codes = lay.area === "town" ? await esgCitiesInView() : esgMeshesInView();
+                if (!codes.length) throw new Error("地図の範囲の市区町村が分かりませんでした");
+                if (lay.area !== "town" && codes.length > ESG_MAX_MESH[lay.area]) throw new Error("範囲が広すぎます。もう少し拡大してください");
+                toast("取得中…", 30000);
+                ES.data[lay.id] = null;
+                const l = upd({ codes, on: true });
+                await estatApplyOne(l);
+                const names = ES.data[l.id]?.names || [];
+                upd({ selText: esgSelText(l.selBase || "", names) });
+                toast("今の範囲で塗り直しました"); renderLayers();
+              } catch (e) { toast(e.message, 4000); }
+            } }, "今の範囲にする")
+            : h("button", { type: "button", class: "chip", onclick: async () => { ES.data[lay.id] = null; const l = upd({ values: null }); try { await estatApplyOne(l); toast("取り直しました"); } catch (e) { toast(e.message, 4000); } } }, "取り直す"),
+          lay.src === "gis"
+            ? h("button", { type: "button", class: "chip", onclick: async () => {
+              // 端末と中継サーバのキャッシュを使わずに e-Stat から取り直す
+              try {
+                toast("e-Stat から取り直しています…", 60000);
+                const l = upd({ on: true });
+                await esgBuild(l, { fresh: true });
+                await estatApplyOne(estatCfg().layers.find((x) => x.id === l.id));
+                toast("最新のデータで塗り直しました"); renderLayers();
+              } catch (e) { toast(e.message, 4000); }
+            } }, "最新を取り直す")
+            : "",
           h("button", { type: "button", class: "chip", onclick: () => { if (!confirm(`「${lay.title}」を削除しますか？`)) return; ovlRemove(`es-${lay.id}`); estatSave({ layers: estatCfg().layers.filter((l) => l.id !== lay.id) }); delete ES.data[lay.id]; dataLegendUpdate(); renderLayers(); } }, "削除"))));
     }
-    if (!estatCfg().layers.length) layersBox.append(h("p", { class: "note" }, "まだありません。下で統計表を探して追加してください。"));
+    if (!estatCfg().layers.length) layersBox.append(h("p", { class: "note" }, "まだありません。下で統計を選んでください。"));
   };
   renderLayers();
 
@@ -854,15 +901,25 @@ function openEstatSheet() {
   };
   const form = h("form", { class: "gr-search" }, q, h("button", { type: "submit", class: "chip" }, "検索"));
   form.onsubmit = search;
+  const proxy = h("input", { type: "text", value: reinfoCfg().proxy || "", placeholder: "https://xxxx.workers.dev", inputmode: "url" });
+  proxy.onchange = () => reinfoSave({ proxy: proxy.value.trim() });
   openSheet("e-Stat 統計を重ねる", h("div", {},
     dataBack2(),
     h("div", { class: "sect-title" }, "表示中の統計"), layersBox,
-    h("div", { class: "sect-title" }, "統計表を探す"), form, results,
-    h("details", { open: !cfg.appId && !reinfoBase() }, h("summary", {}, "e-Stat API の設定"),
-      h("label", {}, "アプリケーション ID（e-Stat でユーザー登録すると無料で発行）", appId),
-      h("p", { class: "note" }, "ID はこの端末だけに保存されます。中継サーバ（不動産情報ライブラリの設定）に ID を預けている場合は空欄で構いません。")),
-    h("p", { class: "note" }, "市区町村・都道府県・地域メッシュ（1km など）単位の統計表を、地図上で塗り分けます。市区町村の境界は Geoshape の市区町村界（2023 年）を使うため、それ以前の合併前の市町村は表示されません。小地域（町丁・字）の統計は境界が API で配布されていないため対象外です。"),
-    h("p", { class: "note" }, "このサービスは、政府統計総合窓口(e-Stat)の API 機能を使用していますが、サービスの内容は国によって保証されたものではありません。")), { backdrop: false, height: "75vh" });
+    h("div", { class: "sect-title" }, "町丁・字やメッシュの統計を選ぶ"),
+    h("p", { class: "note", style: "margin-top:0" }, "国勢調査・経済センサス・将来推計人口を、今見ている地図の範囲について町丁・字ごと、またはメッシュごとに塗り分けます。単位を選んでから統計を選んでください。"),
+    h("p", { class: "note esg-catalog-date" }, `統計の一覧：${typeof ESTAT_GIS_UPDATED === "string" ? ESTAT_GIS_UPDATED : "—"} 更新（e-Stat に新しい統計が出ていないか毎月自動で確かめています）。取ったデータは 90 日たつと取り直します。`),
+    esgChooser(),
+    h("details", { open: !reinfoBase() }, h("summary", {}, "中継サーバ（必須）"),
+      h("label", {}, "中継サーバの URL（不動産情報ライブラリと共通）", proxy),
+      h("p", { class: "note" }, "e-Stat の町丁・字やメッシュのデータはブラウザから直接取れないため、中継サーバ（Cloudflare Worker）を通します。README の「不動産情報ライブラリ・e-Stat の中継サーバ」の最新のコードを Worker に貼ってください（/estatgis に対応したもの）。一度取ったデータは端末に残るので、2 回目からは電波がなくても表示できます。")),
+    h("details", {}, h("summary", {}, "市区町村・都道府県単位の統計表を API で探す"),
+      h("p", { class: "note" }, "e-Stat の全統計表から言葉で探します。市区町村・都道府県単位の表が中心です。"),
+      form, results,
+      h("label", {}, "アプリケーション ID（e-Stat でユーザー登録すると無料で発行。中継サーバに預けている場合は空欄）", appId),
+      h("p", { class: "note" }, "市区町村の境界は Geoshape の市区町村界（2023 年）を使うため、それ以前の合併前の市町村は表示されません。")),
+    h("p", { class: "note" }, "出典：政府統計の総合窓口（e-Stat）。町丁・字の境界は国勢調査の小地域境界、メッシュの将来推計人口は国土交通省の推計（2015 年国勢調査基準）です。秘匿された地域（人が少ない地域など）は値を出しません。"),
+    h("p", { class: "note" }, "このサービスは、政府統計総合窓口(e-Stat)の API 機能を使用していますが、サービスの内容は国によって保証されたものではありません。")), { backdrop: false, height: "80vh" });
 }
 
 /** 統計表を選んだ後：表示する項目（表章・分類・時点）と地域の範囲を選ぶ */

@@ -1,0 +1,57 @@
+# e-Stat「地図で見る統計（統計GIS）」に新しい町丁・字等／メッシュの統計表が出ていないかを毎月確かめ、
+# あれば統計の一覧（estat-gis-catalog.js）を作り直してプルリクを開く（なければ何もしない）
+name: e-Stat 統計一覧の更新確認
+
+on:
+  schedule:
+    - cron: "17 3 6 * *" # 毎月 6 日 12:17（日本時間）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: estat-catalog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: pdftotext を入れる
+        run: sudo apt-get update -q && sudo apt-get install -y -q poppler-utils
+      - name: 新しい統計表を調べて一覧を作り直す
+        run: python3 tools/build_estat_gis_catalog.py --discover --report "$RUNNER_TEMP/report.md" --workdir "$RUNNER_TEMP/pdf"
+      - name: 結果
+        run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: 一覧が変わったらプルリクを開く
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- estat-gis-catalog.js; then
+            echo "地図に出す統計の一覧は変わりませんでした"
+            exit 0
+          fi
+          branch="estat-catalog/$(date +%Y-%m)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add estat-gis-catalog.js tools/estat_gis_tables.json
+          git commit -m "e-Stat 統計GIS の新しい統計表を一覧に追加"
+          git push -f origin "$branch"
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "プルリクは開いています（更新しました）"
+            exit 0
+          fi
+          body="$RUNNER_TEMP/body.md"
+          {
+            cat "$RUNNER_TEMP/report.md"
+            echo
+            echo "自動で足した統計（tools/estat_gis_tables.json の \`auto: true\`）は、題名とテーマが e-Stat の表名のままです。必要なら直してからマージしてください。"
+          } > "$body"
+          gh pr create --base main --head "$branch" --title "e-Stat の統計一覧を更新（$(date +%Y-%m)）" --body-file "$body" \
+            || gh issue create --title "e-Stat に新しい統計表があります（$(date +%Y-%m)）" --body-file "$body"
