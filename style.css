@@ -12,6 +12,7 @@
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --bb-h: 62px;
+  --font: "BIZ UDPGothic", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -29,11 +30,12 @@
 html, body {
   margin: 0; height: 100%; overflow: hidden; background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
+  font-family: var(--font);
   font-size: 15px;
   overscroll-behavior: none;
 }
 button { font: inherit; color: inherit; }
+.leaflet-container, .leaflet-container button, .leaflet-popup-content, .maplibregl-map { font-family: var(--font); }
 svg { fill: currentColor; }
 [hidden] { display: none !important; }
 
@@ -150,6 +152,7 @@ input[type=text], input[type=search], input[type=number], textarea, select {
   display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 16px; color: var(--fg);
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px;
 }
+select { border-color: transparent; } /* 選択欄はボタンと同じく枠線なし（文字を打つ欄は枠線を残す） */
 textarea { resize: vertical; min-height: 96px; }
 input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 input[type=range] { width: 100%; accent-color: var(--accent); }
@@ -174,7 +177,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   background: var(--bg-2); color: var(--fg); text-align: center;
 }
 .btn.primary { background: var(--accent); color: #fff; font-weight: 600; }
-.btn.secondary { background: var(--bg-2); border: 1px solid var(--line); }
+.btn.secondary { background: var(--bg-2); border: 0; }
 .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 .btn.block { display: block; width: 100%; margin-top: 8px; }
 .file-btn { display: inline-block; color: var(--fg) !important; font-size: 15px !important; margin: 0 !important; }
@@ -531,9 +534,9 @@ body.print-mode .data-legend { display: none !important; }
 .vt-card.vt-custom .chip { display: inline-block; margin: 2px 8px 8px; padding: 3px 10px; font-size: 12px; }
 
 /* 切り替えボタン（2〜4 択） */
-.seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg { display: flex; border: 0; border-radius: 10px; overflow: hidden; background: var(--bg-2); }
 .seg button { flex: 1; border: 0; background: var(--bg-2); color: var(--fg); padding: 9px 6px; font: inherit; font-size: 13.5px; cursor: pointer; }
-.seg button + button { border-left: 1px solid var(--line); }
+.seg button + button { border-left: 1px solid var(--bg); } /* 枠線の代わりに、背景色の細い隙間で区切る */
 .seg button.on { background: var(--accent-2); color: #fff; font-weight: 700; }
 .fgd-groups label.inline { margin: 6px 0; font-size: 14px; }
 
@@ -727,7 +730,7 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 .cl-photo .cl-n { left: auto !important; right: -10px; top: -10px !important; min-width: 22px; height: 22px; line-height: 18px; font-size: 11.5px; }
 /* 見出し付きの切り替え（1 行に収める） */
 .seg.seg-opt { flex: 1; min-width: 0; align-items: stretch; }
-.seg.seg-opt .seg-lab { flex: none; display: flex; align-items: center; padding: 0 8px; font-size: 12px; color: var(--fg-2); background: var(--bg); border-right: 1px solid var(--line); white-space: nowrap; }
+.seg.seg-opt .seg-lab { flex: none; display: flex; align-items: center; padding: 0 8px; font-size: 12px; color: var(--fg-2); background: transparent; border-right: 1px solid var(--bg); white-space: nowrap; }
 .seg.seg-opt button { flex: 1 1 0; min-width: 0; padding: 7px 2px; font-size: 12.5px; white-space: nowrap; letter-spacing: -0.02em; }
 .opt-rows { display: grid; gap: 8px; }
 @media (max-width: 360px) { .seg.seg-opt .seg-lab { padding: 0 6px; font-size: 11px; } .seg.seg-opt button { font-size: 11.5px; } }
@@ -749,3 +752,32 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #busy .busy-text { font-variant-numeric: tabular-nums; }
 #busy .busy-warn { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: #fff4e5; color: #8a4b00; font-size: 13px; line-height: 1.55; }
 @media (prefers-color-scheme: dark) { #busy .busy-warn { background: #3a2a12; color: #ffcf8a; } }
+
+/* 読み込み・書き出し（右のボタン） */
+.fab .i-updown { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.msec.xfer .xfer-h { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 8px; }
+.msec.xfer .xfer-h h3 { margin: 2px 0 2px; font-size: 16px; }
+.msec.xfer .xfer-h p { margin: 0; font-size: 12.5px; color: var(--fg-2); line-height: 1.5; }
+.xfer-ico { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--accent); color: #fff; }
+.xfer.up .xfer-ico { background: var(--accent-2); }
+.xfer-ico svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.xfer-btns { display: flex; gap: 8px; margin-top: 10px; }
+.xfer-btns .btn { flex: 1; }
+.fab.fab-lang { font-size: 14px; font-weight: 700; letter-spacing: .02em; }
+
+/* 使い方の案内（チュートリアル） */
+#guide { position: fixed; inset: 0; z-index: 3500; }
+#guide .guide-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, .55); }
+#guide .guide-hole { position: absolute; border-radius: 14px; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, .55); outline: 2px solid #fff; outline-offset: 0; pointer-events: none; transition: all .2s ease; }
+#guide .guide-card { position: absolute; left: 16px; right: 16px; margin: 0 auto; max-width: 420px; background: var(--bg); color: var(--fg); border-radius: 16px; padding: 14px 16px 12px; box-shadow: var(--shadow); }
+#guide .guide-top { display: flex; align-items: center; justify-content: space-between; }
+#guide .guide-step { font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+#guide .guide-skip { border: 0; background: none; color: var(--fg-2); font-size: 13px; padding: 4px 2px; cursor: pointer; text-decoration: underline; }
+#guide h3 { margin: 4px 0 6px; font-size: 17px; }
+#guide p { margin: 0; font-size: 14px; line-height: 1.65; }
+#guide .guide-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+#guide .guide-foot .btn { padding: 9px 14px; font-size: 14px; }
+#guide .guide-foot .btn:disabled { opacity: .45; }
+#guide .guide-dots { display: flex; gap: 5px; }
+#guide .guide-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+#guide .guide-dots i.on { background: var(--accent); }

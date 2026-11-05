@@ -2458,6 +2458,46 @@ function bulkPointsBox() {
 }
 
 /* ====================================================================
+ * 読み込み・書き出し（右のボタン）：設定の「メモ・軌跡を読み込む」と「ZIP（JSON＋写真）」をすぐ使えるように
+ * ==================================================================== */
+/** メモ・軌跡のファイル（ZIP・JSON・GeoJSON・GPX）を選んで読み込む */
+function pickImportFiles() {
+  // GPX は端末によって種類（MIME）が認識されず選べないことがあるので、拡張子での絞り込みはしない
+  const fileIn = h("input", { type: "file", multiple: true, hidden: true });
+  fileIn.onchange = async () => {
+    const files = Array.from(fileIn.files || []);
+    fileIn.remove();
+    if (!files.length) return;
+    closeSheet(true);
+    for (const f of files) await importFile(f);
+  };
+  document.body.append(fileIn);
+  fileIn.click();
+}
+const canShareFiles = () => !!(navigator.canShare && navigator.canShare({ files: [new File(["x"], "x.txt", { type: "text/plain" })] }));
+function openTransferSheet() {
+  const last = Settings.data.lastExportAt;
+  const dirty = !$("#unsaved-badge").hidden;
+  let photoCount = 0;
+  for (const m of S.memos.values()) photoCount += m.photoCount || 0;
+  const share = canShareFiles();
+  const card = (cls, icon, title, sub, ...kids) => h("section", { class: `msec xfer ${cls}` },
+    h("div", { class: "xfer-h" }, h("span", { class: "xfer-ico", html: icon }), h("div", {}, h("h3", {}, title), h("p", {}, sub))), ...kids);
+  const ICON_DOWN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>';
+  const ICON_UP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5v-11M7 9l5-5 5 5M5 19.5h14"/></svg>';
+  openSheet("読み込み・書き出し", h("div", {},
+    card("down", ICON_DOWN, "書き出す（ダウンロード）", "すべてのメモ・写真・軌跡を ZIP（JSON＋写真）に保存します。このアプリで読み戻せるバックアップです",
+      h("div", { class: "msec-meta" + (dirty ? " warn-text" : "") }, `メモ ${S.memos.size} 件・写真 ${photoCount} 枚　最終書き出し：${last ? fmtDate(last) : "なし"}${dirty ? "（その後に追加・変更あり）" : ""}`),
+      photoQualityPicker(),
+      h("div", { class: "xfer-btns" },
+        h("button", { class: "btn primary", type: "button", onclick: () => { closeSheet(true); doExport("zip", "download"); } }, "ZIP を保存"),
+        share ? h("button", { class: "btn secondary", type: "button", onclick: () => { closeSheet(true); doExport("zip", "share"); } }, "共有") : null)),
+    card("up", ICON_UP, "読み込む（アップロード）", "書き出した ZIP・JSON・GeoJSON や、GPS ロガーの GPX を読み込みます。ほかの人のデータの追加や、バックアップからの復元に",
+      h("div", { class: "xfer-btns" }, h("button", { class: "btn primary", type: "button", onclick: pickImportFiles }, "ファイルを選ぶ"))),
+    h("p", { class: "note" }, "ほかの形式（JSON・GeoJSON・CSV・GPX）での書き出しは「保存/設定」にあります。")));
+}
+
+/* ====================================================================
  * メニュー（保存・設定）
  * ==================================================================== */
 async function openMenu() {
@@ -2579,6 +2619,8 @@ async function openMenu() {
         h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
         h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
         h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "その場で文字にできなかった録音は、録音後に自動で書き起こす")),
+      sec("使い方", "記録・メモ一覧・見返す・保存/設定などの案内",
+        h("button", { class: "btn secondary block", type: "button", onclick: () => { closeSheet(true); openGuide(0); } }, "使い方の案内をもう一度見る")),
       sec("詳細設定", null,
         h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn)),
       h("div", { class: "msave" }, h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存")),
@@ -3259,6 +3301,7 @@ function bindUI() {
   bindViewer();
   $("#btn-list").onclick = openList;
   $("#btn-menu").onclick = openMenu;
+  $("#btn-data").onclick = openTransferSheet;
   $("#status").onclick = () => {
     const c = S.crosshair ? { lat: S.map.getCenter().lat, lon: S.map.getCenter().lng } : S.pos;
     if (!c) return requestLocation();
@@ -3305,5 +3348,6 @@ async function main() {
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
+  maybeOpenGuide(); // 初めて開いたときだけ、使い方の案内
 }
 main();
