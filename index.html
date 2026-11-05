@@ -94,7 +94,17 @@
 
 <!-- 写真ビューア -->
 <div id="viewer" hidden role="dialog" aria-modal="true" aria-label="写真">
-  <div id="v-stage"><img id="v-img" alt=""></div>
+  <div id="v-stage"><img id="v-img" alt=""><div id="v-card" hidden></div></div>
+  <div id="v-pb" hidden>
+    <div id="v-pb-text"></div>
+    <div class="v-pb-act">
+      <button id="v-fav" class="v-btn wide" type="button">お気に入り</button>
+      <span id="v-fav-size"></span>
+      <span class="v-spacer"></span>
+      <button id="v-favonly" class="v-btn wide" type="button">お気に入りだけ</button>
+      <button id="v-play" class="v-btn wide" type="button">自動再生</button>
+    </div>
+  </div>
   <div class="v-top">
     <div class="v-info"><div id="v-title"></div><div id="v-meta"></div></div>
     <button id="v-close" class="v-btn" aria-label="閉じる">✕</button>
