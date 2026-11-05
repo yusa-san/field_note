@@ -2,7 +2,7 @@
  * - アプリ本体: ネットワーク優先（更新をすぐ反映）、オフライン時はキャッシュ
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v26";
+const VERSION = "v27";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの
