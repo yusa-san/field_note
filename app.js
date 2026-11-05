@@ -1721,7 +1721,7 @@ function toggleMeasure() {
   S.measure = { pts: [], line: L.polyline([], { color: "#ff6d00", weight: 3, dashArray: "6 6" }).addTo(S.map), poly: null, marks: [] };
   $("#btn-measure").classList.add("active");
   $("#measure-bar").hidden = false;
-  $("#btn-add-center span").textContent = "中心を計測点に";
+  $("#btn-add-center span").textContent = "中心を追加";
   if (!S.crosshair) toast("地図をタップして点を追加。十字線を出すと中心で追加も可");
   updateMeasure();
 }
@@ -2619,12 +2619,11 @@ async function openMenu() {
         h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
         h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
         h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "その場で文字にできなかった録音は、録音後に自動で書き起こす")),
-      sec("使い方", "記録・メモ一覧・見返す・保存/設定などの案内",
-        h("button", { class: "btn secondary block", type: "button", onclick: () => { closeSheet(true); openGuide(0); } }, "使い方の案内をもう一度見る")),
       sec("詳細設定", null,
         h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn)),
       h("div", { class: "msave" }, h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存")),
-      sec("使い方", null,
+      sec("使い方", "記録・メモ一覧・見返す・保存/設定などの案内",
+        h("button", { class: "btn secondary block", type: "button", style: "margin:0 0 12px", onclick: () => { closeSheet(true); openGuide(0); } }, "使い方の案内をもう一度見る"),
         h("p", { class: "note", style: "margin:0" },
           "画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は国土地理院の標高タイル（1m があればその値、なければ 5m・10m）または標高 API による値で、GPS高度とは別に記録されます。")),
       h("section", { class: "msec danger-zone" }, h("div", { class: "msec-h" }, h("h3", {}, "データの消去"), h("p", {}, "メモ・写真・録音・軌跡を端末から消します（元に戻せません）")),

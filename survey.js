@@ -352,7 +352,7 @@ function openGpsCalib() {
     h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, "位置のずれを直す"), h("p", {}, "GPS がいつも同じ向きにずれる場所で。地図で本当の位置を指定すると、その差を以後の測位に当てます。")),
       h("div", { class: "msec-meta", style: "margin-top:0" }, offTxt),
       h("div", { class: "menu-grid", style: "margin-top:8px" },
-        h("button", { type: "button", class: "btn secondary", onclick: startOffsetCalib }, "地図で正しい位置を指定"),
+        h("button", { type: "button", class: "btn secondary", onclick: startOffsetCalib }, "地図で指定する"),
         h("button", { type: "button", class: "btn secondary", disabled: !c.offset, onclick: () => { gpsSave({ offset: null }); toast("位置の補正を解除しました"); openGpsCalib(); } }, "補正を解除"))),
     h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, "測位を平均してメモを作る"), h("p", {}, "「現在地にメモ」のとき、数秒間の測位を平均して位置を決めます（立ち止まって使うと精度が上がります）。")),
       sel([[0, "平均しない（すぐ作る）"], [5, "5 秒"], [10, "10 秒"], [20, "20 秒"], [30, "30 秒"]], c.avgSec, "avgSec")),
