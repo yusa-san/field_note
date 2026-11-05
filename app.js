@@ -1345,6 +1345,7 @@ function openList() {
   const selBtn = h("button", { type: "button", class: "chip sel-toggle" }, "選択して整理");
   let allPhotos = null;
   DB.all("photos").then((ps) => {
+    ps = ps.filter((p) => S.memos.has(p.memoId)); // メモのない写真（取り込みの途中で止まったものなど）は数えない
     allPhotos = ps;
     tabPhotos.textContent = `写真（${ps.length}）`;
     if (listState.view === "photos") render();
