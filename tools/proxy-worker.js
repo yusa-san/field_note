@@ -78,10 +78,11 @@ export default {
     if (!res) {
       let up;
       try {
-        // 応答がないまま待ち続けないよう 25 秒で打ち切る。User-Agent は明示する（付けないと拒否するサーバがある）
+        // 応答がないまま待ち続けないよう打ち切る（タイル 25 秒。e-Stat は Cloudflare からだと 1 件でも数秒かかり、
+        // 大きな統計表の取得はさらに時間がかかるので 100 秒）。User-Agent は明示する（付けないと拒否するサーバがある）
         up = await fetch(target, {
           headers: { ...headers, "User-Agent": "fieldnote-proxy/1.0 (+https://github.com/yusa-san/field_note)", Accept: "application/json, */*" },
-          signal: AbortSignal.timeout(25000),
+          signal: AbortSignal.timeout(url.pathname.startsWith("/estat/") ? 100000 : 25000),
           cf: { cacheTtl: ttl, cacheEverything: true },
         });
       } catch (e) {

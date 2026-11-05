@@ -33,11 +33,18 @@ const OVERLAYS = [
   { id: "ov_lcmfc", name: "治水地形分類図", desc: "旧河道・自然堤防・後背湿地など", url: `${GSI_XYZ}/lcmfc2/{z}/{x}/{y}.png`, min: 11, max: 16, op: 0.6, attr: ATTR_GSI },
   { id: "ov_lcm25k", name: "土地条件図", desc: "地形分類（主に都市部）", url: `${GSI_XYZ}/lcm25k_2012/{z}/{x}/{y}.png`, min: 10, max: 16, op: 0.6, attr: ATTR_GSI },
   { id: "ov_swale", name: "明治期の低湿地", desc: "明治期の地図から判読した湿地", url: `${GSI_XYZ}/swale/{z}/{x}/{y}.png`, min: 10, max: 16, op: 0.6, attr: ATTR_GSI },
-  { id: "ov_flood", name: "洪水浸水想定（最大）", desc: "想定最大規模の浸水深", url: `${HAZ}/01_flood_l2_shinsuishin_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ },
-  { id: "ov_tsunami", name: "津波浸水想定", desc: "都道府県の津波浸水想定", url: `${HAZ}/04_tsunami_newlegend_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ },
-  { id: "ov_dosekiryu", name: "土石流警戒区域", desc: "土砂災害警戒区域（土石流）", url: `${HAZ}/05_dosekiryukeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ },
-  { id: "ov_kyukeisha", name: "急傾斜地警戒区域", desc: "土砂災害警戒区域（急傾斜地の崩壊）", url: `${HAZ}/05_kyukeishakeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ },
-  { id: "ov_jisuberi", name: "地すべり警戒区域", desc: "土砂災害警戒区域（地すべり）", url: `${HAZ}/05_jisuberikeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ },
+  { id: "ov_flood", name: "洪水浸水想定（最大）", desc: "想定最大規模の浸水深", url: `${HAZ}/01_flood_l2_shinsuishin_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "shinsui_legend3.png" },
+  { id: "ov_flood_l1", name: "洪水浸水想定（計画規模）", desc: "計画規模（数十〜百年に一度）の浸水深", url: `${HAZ}/01_flood_l1_shinsuishin_newlegend_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "shinsui_legend3.png" },
+  { id: "ov_flood_keizoku", name: "浸水継続時間", desc: "想定最大規模で浸水が続く時間", url: `${HAZ}/01_flood_l2_keizoku_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "shinsui_legend_l2_keizoku.png" },
+  { id: "ov_kaoku_hanran", name: "家屋倒壊等氾濫想定区域（氾濫流）", desc: "氾濫の流れで家屋が倒壊するおそれ", url: `${HAZ}/01_flood_l2_kaokutoukai_hanran_data/{z}/{x}/{y}.png`, min: 4, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "kaokutoukai_hanran.png" },
+  { id: "ov_kaoku_kagan", name: "家屋倒壊等氾濫想定区域（河岸侵食）", desc: "河岸が削られて家屋が倒壊するおそれ", url: `${HAZ}/01_flood_l2_kaokutoukai_kagan_data/{z}/{x}/{y}.png`, min: 4, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "kaokutoukai_kagan.png" },
+  { id: "ov_naisui", name: "内水浸水想定", desc: "下水道などからあふれる浸水", url: `${HAZ}/02_naisui_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "naisui_legend.png" },
+  { id: "ov_hightide", name: "高潮浸水想定", desc: "想定最大規模の高潮の浸水深", url: `${HAZ}/03_hightide_l2_shinsuishin_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "shinsui_legend3.png" },
+  { id: "ov_tsunami", name: "津波浸水想定", desc: "都道府県の津波浸水想定", url: `${HAZ}/04_tsunami_newlegend_data/{z}/{x}/{y}.png`, max: 17, op: 0.6, attr: ATTR_HAZ, legend: "shinsui_legend3.png" },
+  { id: "ov_dosekiryu", name: "土石流警戒区域", desc: "土砂災害警戒区域（土石流）", url: `${HAZ}/05_dosekiryukeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ, legend: "keikai_dosekiryu.png" },
+  { id: "ov_kyukeisha", name: "急傾斜地警戒区域", desc: "土砂災害警戒区域（急傾斜地の崩壊）", url: `${HAZ}/05_kyukeishakeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ, legend: "keikai_kyukeisya.png" },
+  { id: "ov_jisuberi", name: "地すべり警戒区域", desc: "土砂災害警戒区域（地すべり）", url: `${HAZ}/05_jisuberikeikaikuiki/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ, legend: "keikai_jisuberi.png" },
+  { id: "ov_nadare", name: "雪崩危険箇所", desc: "雪崩のおそれがある箇所", url: `${HAZ}/05_nadarekikenkasyo/{z}/{x}/{y}.png`, max: 17, op: 0.7, attr: ATTR_HAZ },
 ];
 
 const PALETTE = ["#2e7d32", "#6d4c41", "#5e35b1", "#1565c0", "#00838f", "#c62828", "#ef6c00", "#ad1457", "#558b2f", "#616161"];
@@ -336,7 +343,7 @@ function initMap() {
     S.thumbMode = tm;
     for (const id of S.memoThumb.keys()) { const m = S.memos.get(id); if (m) renderMarker(m); }
   });
-  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng) || dataLayerClick(e.latlng)));
+  S.map.on("click", (e) => (S.measure ? addMeasurePoint(e.latlng) : pdfLayerClick(e.latlng) || dataLayerClick(e.latlng) || extraLayerClick(e.latlng)));
   S.map.on("contextmenu", (e) => onLongPress(e.latlng));
   setupLongPress();
   return !saved; // 初回起動なら最初の測位位置へ移動する
@@ -687,6 +694,13 @@ function tileThumbUrl(def) {
   const y = Math.floor(((1 - Math.asinh(Math.tan(rad(c.lat))) / Math.PI) / 2) * n);
   return def.url.replace("{z}", z).replace("{x}", x).replace("{y}", y);
 }
+/** 重ねる地図の凡例（ハザードマップポータルサイトの凡例画像） */
+function showLegendImage(def) {
+  const url = /^https?:/.test(def.legend) ? def.legend : `https://disaportal.gsi.go.jp/hazardmapportal/hazardmap/copyright/img/${def.legend}`;
+  openSheet(`凡例：${def.name}`, h("div", {}, h("button", { type: "button", class: "chip vt-back", onclick: () => openLayers() }, "← 地図の切替に戻る"),
+    h("img", { src: url, alt: `${def.name}の凡例`, style: "max-width:100%;background:#fff;border-radius:8px;padding:6px" }),
+    h("p", { class: "note" }, "出典：ハザードマップポータルサイト")), { backdrop: false, height: "60vh" });
+}
 function openLayers() {
   const grid = h("div", { class: "layer-grid" });
   const cards = [];
@@ -724,9 +738,13 @@ function openLayers() {
       if (!cb.checked) cb.checked = true;
       setOverlay(def.id, Number(rg.value));
     };
-    ovs.append(h("div", { class: "ov-row" }, cb, h("div", {}, def.name, h("small", {}, def.desc + (def.min ? `（ズーム${def.min}〜）` : ""))), rg));
+    const lg = def.legend ? h("button", { type: "button", class: "chip lg-btn", onclick: () => showLegendImage(def) }, "凡例") : null;
+    ovs.append(h("div", { class: "ov-row" }, cb, h("div", {}, def.name, h("small", {}, def.desc + (def.min ? `（ズーム${def.min}〜）` : "")), lg), rg));
   }
   const body = h("div", {},
+    h("div", { class: "menu-grid", style: "margin:4px 0 2px" },
+      h("button", { type: "button", class: "btn secondary", onclick: openCompareSheet }, CMP.on ? "比較を変える" : "2 つの地図を比べる"),
+      h("button", { type: "button", class: "btn secondary", onclick: () => openExtraLayers() }, "その他のレイヤ")),
     h("div", { class: "sect-title" }, "ベース地図：地理院 Vector"), vtRow,
     h("div", { class: "sect-title" }, "ベース地図：画像タイル"), grid,
     h("div", { class: "sect-title" }, "重ねる地図（透過度）"), ovs,
@@ -1189,9 +1207,9 @@ function trackListBox() {
         tracks = tracks.filter((x) => x !== t);
         render();
       };
-      box.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto;cursor:default" },
+      box.append(h("div", { class: "memo-item", style: "grid-template-columns:1fr auto auto auto;cursor:default" },
         h("div", {}, h("div", { class: "t" }, t.name + (t.endedAt ? "" : "（記録中）")), h("div", { class: "s" }, [t.source === "gpx" ? "GPX" : "", fmtDate(t.startedAt), fmtDist(t.distance), `${t.points.length}点`].filter(Boolean).join("・"))),
-        showBtn, delBtn));
+        h("button", { class: "chip", type: "button", onclick: () => { closeSheet(true); elevationProfile(trackLatLngs(t).flat(), t.name); } }, "断面"), showBtn, delBtn));
     }
   };
   DB.all("tracks").then((ts) => { tracks = ts.sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1)); render(); });
@@ -2203,6 +2221,7 @@ async function openMenu() {
         h("button", { class: "btn secondary block", type: "button", onclick: () => fileIn.click() }, "ファイルを選ぶ"), fileIn,
         hint("同じ ID のメモは更新日時が新しい方を採用します。別の端末で記録したデータの統合にも使えます。GPX（GPSLogger など GPS ロガーアプリの記録）は軌跡として、GPX 内の地点はメモとして取り込みます。複数ファイルをまとめて選べます。")),
       sec("地点をまとめて入力", "「緯度, 経度, 名称」を 1 行ずつ貼り付けてメモにする", bulkPointsBox()),
+      sec("写真をまとめて読み込む", "撮影位置（位置情報）付きの写真から、その場所に写真メモを作る", exifImportBox()),
       sec("地図に重ねる", "メモにはせず、地図の上に表示だけする",
         sub("ファイルから"),
         h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報"),
@@ -2529,6 +2548,7 @@ function bindUI() {
     updateMeasure();
   };
   $("#btn-track").onclick = toggleTrack;
+  $("#measure-prof").onclick = () => { if (!S.measure || S.measure.pts.length < 2) return toast("2 点以上を置くと断面図を描けます"); elevationProfile(S.measure.pts, "計測した線"); };
   $("#btn-crosshair").onclick = () => toggleCrosshair();
   $("#btn-locate").onclick = () => {
     startOrientation();
@@ -2576,6 +2596,8 @@ async function main() {
   moveToFirstFix = initMap();
   demRestore();
   dataRestore();
+  extraRestore();
+  startSun();
   try {
     await resumeTrackIfAny();
     await loadMemos();

@@ -579,3 +579,38 @@ details.hint p { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-2); line-he
 /* メモ一覧の下の軌跡 */
 .track-list { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
 .track-head { font-size: 13px; font-weight: 700; color: var(--fg-2); margin-bottom: 4px; }
+
+/* 日の出・日の入り（ステータス欄の端に小さく） */
+#st-sun { opacity: .85; }
+/* 標高断面図 */
+.prof-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--fg-2); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.prof-svg { width: 100%; height: auto; display: block; touch-action: none; user-select: none; }
+.prof-area { fill: rgba(47, 138, 107, .18); }
+.prof-line { fill: none; stroke: var(--accent-2); stroke-width: 2; stroke-linejoin: round; }
+.prof-grid { stroke: var(--line); stroke-width: 1; }
+.prof-ax { fill: var(--fg-2); font-size: 11px; }
+.prof-cur { stroke: #d0021b; stroke-width: 1; }
+.prof-dot { fill: #d0021b; stroke: #fff; stroke-width: 1.5; }
+.prof-read { font-size: 13px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+/* 2 つの地図を比べる */
+.cmp-bar { position: fixed; top: 0; bottom: 0; width: 0; z-index: 470; pointer-events: none; }
+.cmp-bar::before { content: ""; position: absolute; top: 0; bottom: 0; left: -1.5px; width: 3px; background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .5); }
+.cmp-handle { position: absolute; top: 50%; left: -20px; width: 40px; height: 40px; margin-top: -20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, .45); pointer-events: auto; cursor: ew-resize; touch-action: none; display: flex; align-items: center; justify-content: center; }
+.cmp-handle i { width: 16px; height: 12px; border-left: 3px solid #555; border-right: 3px solid #555; }
+.cmp-info { position: fixed; z-index: 480; left: 8px; right: 8px; bottom: calc(var(--bb-h) + var(--safe-bottom) + 8px); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 12px; font-size: 12.5px; box-shadow: var(--shadow); }
+.cmp-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.cmp-info .cmp-r { text-align: right; }
+body.print-mode .cmp-bar, body.print-mode .cmp-info { display: none; }
+
+/* その他のレイヤ */
+.lg-btn { margin-top: 4px; padding: 2px 10px; font-size: 12px; }
+.amd-pin { background: rgba(255, 255, 255, .92); border: 1px solid rgba(0, 0, 0, .25); border-radius: 6px; padding: 1px 4px; font: 600 11px/1.2 system-ui, sans-serif; color: #222; white-space: nowrap; transform: translate(-50%, -50%); box-shadow: 0 1px 2px rgba(0, 0, 0, .2); }
+.amd-pin.hot { background: #ffd6cc; } .amd-pin.warm { background: #fff1c2; } .amd-pin.cold { background: #d6e8ff; }
+.amd-pin.rain1 { background: #cfe6ff; } .amd-pin.rain2 { background: #6aa8ff; color: #fff; }
+.wk-pin { border-radius: 50%; color: #fff; font: 700 11px/20px Georgia, serif; text-align: center; border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+.wk-pin.wp { background: #3b3b3b; } .wk-pin.wd { background: #339966; font-family: system-ui, sans-serif; }
+.wk-pop img { float: right; width: 72px; height: auto; margin: 0 0 4px 8px; border-radius: 4px; }
+.jps-item { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); color: inherit; text-decoration: none; }
+.jps-item img, .jps-noimg { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: var(--bg-2); display: block; }
+.jps-item b { display: block; font-size: 13.5px; font-weight: 600; }
+.jps-item small { display: block; font-size: 12px; color: var(--fg-2); margin-top: 2px; }
