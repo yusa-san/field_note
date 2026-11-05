@@ -37,13 +37,20 @@ function ownerLegendGroup() {
   return { key: "owners", title: "記録者", items: [...counts].map(([n, c]) => ({ color: ownerColor(n), text: `${n}（${c}）`, kind: "dot" })) };
 }
 /** 色分けの切り替えボタン（一覧・設定で使う） */
-function colorBySeg(onChange) {
-  const seg = h("div", { class: "seg seg-sm" }, ...[["category", "カテゴリで色分け"], ["owner", "記録者で色分け"]].map(([k, t]) => {
-    const b = h("button", { type: "button", class: colorBy() === k ? "on" : "" }, t);
-    b.onclick = () => { setColorBy(k); seg.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); onChange && onChange(); };
+/** 見出し付きの切り替え（1 行）：[見出し | 選択肢 | 選択肢 …]。一覧と設定で共通の見た目 */
+function optSeg(label, options, get, set) {
+  const seg = h("div", { class: "seg seg-opt", role: "group", "aria-label": label });
+  const draw = () => seg.replaceChildren(h("span", { class: "seg-lab" }, label), ...options.map(([v, t]) => {
+    const on = get() === v;
+    const b = h("button", { type: "button", class: on ? "on" : "", "aria-pressed": on ? "true" : "false" }, t);
+    b.onclick = () => { if (get() === v) return; set(v); draw(); };
     return b;
   }));
+  draw();
   return seg;
+}
+function colorBySeg(onChange) {
+  return optSeg("色分け", [["category", "カテゴリ"], ["owner", "記録者"]], colorBy, (k) => { setColorBy(k); onChange && onChange(); });
 }
 
 /* ====================================================================

@@ -38,7 +38,7 @@ function clUpdate() {
   const z = S.map.getZoom();
   const b = S.map.getBounds().pad(0.35); // 少し外側まで（動かしたとき端が欠けないように）
   const thumbs = S.thumbMode;
-  const favOnly = !!Settings.data.photoPinsFavOnly;
+  const pinMode = photoPinsMode();
   const memos = [...S.memos.values()].filter((m) => b.contains([m.lat, m.lon]));
   const px = (m) => S.map.project([m.lat, m.lon], z);
   const vis = new Set();
@@ -47,15 +47,12 @@ function clUpdate() {
   //    （置かなかったものは、ほかのピンと一緒にまとめる）
   const feats = [];
   for (const m of memos) {
-    const ph = S.memoThumb.get(m.id);
-    if (ph && m.featured) feats.push(m); else rest.push(m);
+    if (featIconSize(m)) feats.push(m); else rest.push(m); // 引いた縮尺ではお気に入りもふつうにまとめる
   }
   feats.sort((a, c) => Number(c.featured) - Number(a.featured) || (a.no || 0) - (c.no || 0));
   const placed = [], demoted = new Set();
   for (const m of feats) {
-    const ph = S.memoThumb.get(m.id), k = Math.min(4, Math.max(2, Number(m.featured) || 3));
-    const ar = Math.min(2, Math.max(0.5, (ph.width || 4) / (ph.height || 3)));
-    const w = 48 * k * (ar >= 1 ? 1 : ar), hh = 48 * k * (ar >= 1 ? 1 / ar : 1);
+    const { w, h: hh } = featIconSize(m);
     const p = px(m), r = { x0: p.x - w / 2, x1: p.x + w / 2, y0: p.y - 10 - hh, y1: p.y - 10 };
     // 小さい方の面積の 15% を超えて重なるなら置かない
     const clash = placed.some((q) => {
@@ -79,7 +76,7 @@ function clUpdate() {
     list.sort((a, c) => (a.no || 0) - (c.no || 0));
     const lat = list.reduce((s, m) => s + m.lat, 0) / list.length, lon = list.reduce((s, m) => s + m.lon, 0) / list.length;
     // 代表：写真を出す縮尺なら写真のあるもの（お気に入りだけの設定ならお気に入り）
-    const rep = thumbs || list.length === 1 ? list.find((m) => S.memoThumb.has(m.id) && (!favOnly || m.featured)) : null;
+    const rep = pinMode !== "none" && (thumbs || list.length === 1) ? list.find((m) => S.memoThumb.has(m.id) && (pinMode === "all" || m.featured)) : null;
     CL.clusters.push(clMarker(lat, lon, list, rep));
   }
   // 地図に置くピンを入れ替える（差分だけ）
@@ -142,10 +139,5 @@ function setupCluster() {
   clUpdate();
 }
 function clusterSeg() {
-  const seg = h("div", { class: "seg seg-sm" }, ...[["auto", `自動（${CL_AUTO_MIN} 件以上）`], ["on", "いつもまとめる"], ["off", "まとめない"]].map(([k, t]) => {
-    const b = h("button", { type: "button", class: clMode() === k ? "on" : "" }, t);
-    b.onclick = () => { Settings.data.clusterMode = k; Settings.save(); seg.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); clUpdate(); };
-    return b;
-  }));
-  return seg;
+  return optSeg("重なるピン", [["auto", "自動"], ["on", "まとめる"], ["off", "まとめない"]], clMode, (k) => { Settings.data.clusterMode = k; Settings.save(); clUpdate(); });
 }

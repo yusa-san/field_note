@@ -459,7 +459,7 @@ async function prFeaturedImages(memos, k) {
   const out = new Map();
   for (const m of memos) {
     const ph = S.memoThumb.get(m.id);
-    if (!ph || !m.featured) continue;
+    if (!ph || !m.featured || photoPinsMode() === "none") continue;
     const feat = Math.min(4, Math.max(2, Number(m.featured) || 3));
     const ar = Math.min(2, Math.max(0.5, (ph.width || 4) / (ph.height || 3)));
     const w = 48 * feat * (ar >= 1 ? 1 : ar) * k, hh = 48 * feat * (ar >= 1 ? 1 / ar : 1) * k;
