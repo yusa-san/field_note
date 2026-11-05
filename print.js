@@ -454,11 +454,59 @@ function prMemosIn(ext) {
     return x >= ext.minX - pad && x <= ext.maxX + pad && y >= ext.minY - pad && y <= ext.maxY + pad;
   }).sort((a, b) => (a.no || 0) - (b.no || 0));
 }
-function prDrawMemos(ctx, ext, r, k, memos, labels) {
+/** 地図で大きく表示する写真（パース・キービジュアル）を印刷用に読み込む：memoId → { img, w, h }（画面と同じ大きさ×k） */
+async function prFeaturedImages(memos, k) {
+  const out = new Map();
+  for (const m of memos) {
+    const ph = S.memoThumb.get(m.id);
+    if (!ph || !m.featured) continue;
+    const feat = Math.min(4, Math.max(2, Number(m.featured) || 3));
+    const ar = Math.min(2, Math.max(0.5, (ph.width || 4) / (ph.height || 3)));
+    const w = 48 * feat * (ar >= 1 ? 1 : ar) * k, hh = 48 * feat * (ar >= 1 ? 1 / ar : 1) * k;
+    try {
+      const img = await createImageBitmap(ph.blob || ph.thumb, { imageOrientation: "from-image", resizeWidth: Math.round(w * 1.5), resizeQuality: "high" });
+      out.set(m.id, { img, w, h: hh });
+    } catch {}
+  }
+  return out;
+}
+function prDrawFeatured(ctx, x, y, k, f, color) {
+  const bw = 4 * k, w = f.w, hh = f.h, x0 = x - w / 2, y0 = y - 10 * k - hh;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 8 * k; ctx.shadowOffsetY = 2 * k;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(x - 7 * k, y0 + hh); ctx.lineTo(x, y); ctx.lineTo(x + 7 * k, y0 + hh); ctx.closePath(); ctx.fill();
+  ctx.fillRect(x0 - bw, y0 - bw, w + bw * 2, hh + bw * 2);
+  ctx.restore();
+  // 写真は枠いっぱいに切り抜いて貼る（画面の object-fit: cover と同じ）
+  const ir = f.img.width / f.img.height, br = w / hh;
+  let sw = f.img.width, sh = f.img.height, sx = 0, sy = 0;
+  if (ir > br) { sw = sh * br; sx = (f.img.width - sw) / 2; } else { sh = sw / br; sy = (f.img.height - sh) / 2; }
+  ctx.drawImage(f.img, sx, sy, sw, sh, x0, y0, w, hh);
+  return { x0, y0 };
+}
+function prDrawMemos(ctx, ext, r, k, memos, labels, feats = new Map()) {
   const rr = 9 * k;
+  // 大きく表示する写真は小さい印より後（上）に描く
+  memos = [...memos].sort((a, b) => (feats.has(a.id) ? 1 : 0) - (feats.has(b.id) ? 1 : 0));
   for (const m of memos) {
     const [mx, my] = toMerc(m.lat, m.lon);
     const x = (mx - ext.minX) / r, y = (ext.maxY - my) / r;
+    const fe = feats.get(m.id);
+    if (fe) {
+      const { x0, y0 } = prDrawFeatured(ctx, x, y, k, fe, memoColor(m));
+      const no = String(m.no ?? "");
+      ctx.beginPath(); ctx.arc(x0, y0, 10 * k, 0, Math.PI * 2); ctx.fillStyle = memoColor(m); ctx.fill();
+      ctx.lineWidth = 2 * k; ctx.strokeStyle = "#fff"; ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.font = `700 ${(no.length > 2 ? 8 : 10) * k}px ${PR_FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(no, x0, y0 + 0.5 * k);
+      if (labels && m.title) {
+        ctx.font = `600 ${11 * k}px ${PR_FONT}`; ctx.textAlign = "left"; ctx.lineWidth = 3.5 * k; ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.lineJoin = "round";
+        const t = m.title.length > 24 ? m.title.slice(0, 23) + "…" : m.title;
+        ctx.strokeText(t, x0 + fe.w + 8 * k, y0 + 8 * k); ctx.fillStyle = "#222"; ctx.fillText(t, x0 + fe.w + 8 * k, y0 + 8 * k);
+      }
+      continue;
+    }
     // 撮影方向
     if (m.heading != null) {
       ctx.save();
@@ -770,7 +818,9 @@ async function prRender(cfg, ext, onProgress = () => {}) {
   }
   if (cands.some((c) => c.kind === "memos")) {
     const memos = prMemosIn(ext);
-    prDrawMemos(mctx, ext, r, k, memos, cfg.memoLabels);
+    const feats = await prFeaturedImages(memos, k);
+    prDrawMemos(mctx, ext, r, k, memos, cfg.memoLabels, feats);
+    for (const f of feats.values()) f.img.close?.();
     const cats = new Map();
     if (colorBy() === "owner") {
       const own = new Map();

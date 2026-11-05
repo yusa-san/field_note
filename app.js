@@ -818,16 +818,30 @@ function renderMarker(m) {
   if (old) S.map.removeLayer(old);
   const color = memoColor(m);
   const ph = S.memoThumb.get(m.id);
-  const icon = ph && S.thumbMode
+  // 大きく表示する写真（パース・キービジュアル）：どの縮尺でも、ふつうの写真の 2〜4 倍で。縦横比は写真に合わせる
+  const feat = ph && m.featured ? Math.min(4, Math.max(2, Number(m.featured) || 3)) : 0;
+  let fw = 48, fh = 48;
+  if (feat) {
+    const ar = Math.min(2, Math.max(0.5, (ph.width || 4) / (ph.height || 3)));
+    fw = Math.round(48 * feat * (ar >= 1 ? 1 : ar));
+    fh = Math.round(48 * feat * (ar >= 1 ? 1 / ar : 1));
+  }
+  const hd = m.heading != null ? `<i class="hd" data-h="${m.heading}" style="transform:rotate(${m.heading + (S.map.getBearing ? S.map.getBearing() : 0)}deg)">▲</i>` : "";
+  const icon = feat
+    ? L.divIcon({
+      className: "photo-pin feat", iconSize: [fw, fh], iconAnchor: [fw / 2, fh + 10], popupAnchor: [0, -fh - 8],
+      html: `<div class="pp" style="border-color:${color};width:${fw}px;height:${fh}px"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
+    })
+    : ph && S.thumbMode
     ? L.divIcon({
       className: "photo-pin", iconSize: [48, 48], iconAnchor: [24, 58], popupAnchor: [0, -56],
-      html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${m.heading != null ? `<i class="hd" data-h="${m.heading}" style="transform:rotate(${m.heading + (S.map.getBearing ? S.map.getBearing() : 0)}deg)">▲</i>` : ""}</div>`,
+      html: `<div class="pp" style="border-color:${color}"><img src="${thumbUrl(ph)}" alt=""><b style="background:${color}">${m.no ?? ""}</b>${hd}</div>`,
     })
     : L.divIcon({
       className: "memo-pin", iconSize: [26, 26], iconAnchor: [13, 30], popupAnchor: [0, -28],
       html: `<div style="background:${color}"><span>${m.no ?? ""}</span></div>`,
     });
-  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: ph ? 100 : 0 }).addTo(S.map);
+  const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: feat ? 500 + feat * 100 : ph ? 100 : 0 }).addTo(S.map);
   mk.bindPopup("", { maxWidth: 260, autoPanPaddingTopLeft: [10, 110], autoPanPaddingBottomRight: [60, 90] });
   mk.on("popupopen", (e) => {
     const cur = S.memos.get(m.id) || m;
@@ -1072,6 +1086,24 @@ async function memoForm(memo, isNew, saved, dirty) {
     }
   };
   renderThumbs();
+  // 地図で大きく表示（パース・キービジュアルなど）
+  let featSize = memo.featured || 0;
+  const featCb = h("input", { type: "checkbox", checked: !!featSize });
+  const featSeg = h("div", { class: "seg seg-sm feat-seg" });
+  const renderFeat = () => {
+    featSeg.hidden = !featCb.checked;
+    featSeg.replaceChildren(...[2, 3, 4].map((k) => {
+      const b = h("button", { type: "button", class: (featSize || 3) === k ? "on" : "" }, `${k} 倍`);
+      b.onclick = () => { featSize = k; dirty = true; renderFeat(); };
+      return b;
+    }));
+  };
+  featCb.onchange = () => { if (featCb.checked && !featSize) featSize = 3; dirty = true; renderFeat(); };
+  renderFeat();
+  form.querySelector(".photo-row").after(h("div", { class: "feat-box" },
+    h("label", { class: "inline" }, featCb, "地図で大きく表示する（パース・キービジュアルなど）"),
+    featSeg,
+    h("div", { class: "note feat-note" }, "先頭の写真を、ほかの写真の 2〜4 倍の大きさで、どの縮尺でも地図に出します。")));
   const addPhotos = async (input) => {
     const files = Array.from(input.files || []);
     input.value = "";
@@ -1140,6 +1172,8 @@ async function memoForm(memo, isNew, saved, dirty) {
     else if (!f.useHeading.checked) memo.heading = null;
     memo.updatedAt = nowIso();
     memo.photoCount = existingPhotos.filter((p) => !removed.has(p.id)).length + newPhotos.length;
+    if (featCb.checked) memo.featured = featSize || 3;
+    else delete memo.featured;
     memo.audioCount = existingAudios.filter((a) => !removedAudios.has(a.id)).length + newAudios.length;
     try {
       await DB.put("memos", memo);
@@ -1362,6 +1396,7 @@ function openList() {
         h("button", { type: "button", class: "btn secondary", onclick: ex(k, "download") }, `${label} を保存`),
         canShare ? h("button", { type: "button", class: "btn secondary", onclick: ex(k, "share") }, `${label} を共有…`) : h("span"));
       panel.append(h("div", { class: "note" }, `選んだ ${sel.size} 件だけを書き出します（写真を含む。軌跡と 重ねた地図は含みません）`),
+        photoQualityPicker(new Set(sel)),
         row("ZIP（写真つき）", "zip"), h("div", { style: "height:6px" }), row("GeoJSON", "geojson"), h("div", { style: "height:6px" }), row("CSV", "csv"));
     }
   };
@@ -1695,6 +1730,75 @@ const memoOut = (m) => {
   return rest;
 };
 
+/* ---------- 書き出す写真の画質（ZIP・JSON に入れる写真だけを縮める。端末の写真はそのまま） ---------- */
+const PHOTO_EXPORT_Q = {
+  orig: { name: "元のまま", desc: "撮ったままの画質（位置などの EXIF も残る）" },
+  hi: { name: "高画質", max: 2560, q: 0.85, bpp: 0.3, desc: "長辺 2560px・JPEG 85%（A4 印刷にも十分）" },
+  mid: { name: "標準", max: 1920, q: 0.8, bpp: 0.22, desc: "長辺 1920px・JPEG 80%（画面で見る・資料に貼る）" },
+  low: { name: "軽量", max: 1280, q: 0.72, bpp: 0.16, desc: "長辺 1280px・JPEG 72%（共有・メール向け）" },
+};
+const exportPhotoQ = () => (PHOTO_EXPORT_Q[Settings.data.exportPhotoQ] ? Settings.data.exportPhotoQ : "orig");
+/** 書き出し用の写真。縮めても小さくならないとき・読めない形式のときは元のまま */
+async function exportPhotoBlob(p, qk = exportPhotoQ()) {
+  const orig = { blob: p.blob, mime: p.mime || p.blob.type || "image/jpeg", width: p.width, height: p.height, compressed: false };
+  const q = PHOTO_EXPORT_Q[qk];
+  if (!q?.max) return orig;
+  let bmp = null;
+  try {
+    bmp = await createImageBitmap(p.blob, { imageOrientation: "from-image" });
+    const sc = Math.min(1, q.max / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * sc)), hh = Math.max(1, Math.round(bmp.height * sc));
+    const c = document.createElement("canvas");
+    c.width = w; c.height = hh;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff"; // 透明な PNG は白地に
+    ctx.fillRect(0, 0, w, hh);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, 0, 0, w, hh);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", q.q));
+    c.width = c.height = 0;
+    if (!blob || blob.size >= p.blob.size) return orig;
+    return { blob, mime: "image/jpeg", width: w, height: hh, compressed: true };
+  } catch {
+    return orig;
+  } finally {
+    bmp?.close?.();
+  }
+}
+/** 画質を選ぶ欄（設定は共通）。memoIds を渡すとそのメモの写真だけで大きさを見積もる */
+function photoQualityPicker(memoIds = null) {
+  const sel = h("select", {}, ...Object.entries(PHOTO_EXPORT_Q).map(([k, q]) => h("option", { value: k, selected: k === exportPhotoQ() }, q.name)));
+  const desc = h("div", { class: "msec-meta pq-desc" });
+  let est = null;
+  const show = () => {
+    const q = PHOTO_EXPORT_Q[sel.value];
+    desc.textContent = q.desc + (est ? `　写真 ${est.n} 枚：元のまま ${fmtMB(est.orig)}${q.max ? ` → 約 ${fmtMB(est[sel.value])}` : ""}` : "");
+  };
+  sel.onchange = () => { Settings.data.exportPhotoQ = sel.value; Settings.save(); show(); };
+  show();
+  (async () => {
+    // 写真の画素数と大きさから、縮めた後の大きさを見積もる（実際は写真の内容で上下する）
+    const photos = (await DB.all("photos")).filter((p) => !memoIds || memoIds.has(p.memoId));
+    const e = { n: photos.length, orig: 0, hi: 0, mid: 0, low: 0 };
+    for (const p of photos) {
+      const bytes = p.blob?.size || p.bytes || 0, long = Math.max(p.width || 0, p.height || 0) || 4000, px = (p.width || 4000) * (p.height || 3000);
+      e.orig += bytes;
+      for (const k of ["hi", "mid", "low"]) {
+        const q = PHOTO_EXPORT_Q[k], sc = Math.min(1, q.max / long);
+        e[k] += Math.min(bytes, px * sc * sc * q.bpp);
+      }
+    }
+    est = e;
+    for (const o of sel.options) {
+      const q = PHOTO_EXPORT_Q[o.value];
+      o.textContent = q.max ? `${q.name}（約 ${fmtMB(e[o.value])}）` : `${q.name}（${fmtMB(e.orig)}）`;
+    }
+    show();
+  })();
+  return h("div", { class: "pq-row" }, h("label", { class: "pq-lab" }, "写真の画質（ZIP・JSON に入れる写真）", sel), desc);
+}
+const fmtMB = (b) => (b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GB` : `${Math.max(0.1, b / 1048576).toFixed(1)} MB`);
+
 /**
  * 全データの JSON を作る。
  * photoMode: "none" = 写真はファイル名のみ / "dataUrl" = base64 で埋め込む / "file" = ZIP 用（files に実体を返す）
@@ -1708,15 +1812,22 @@ async function buildJSON(photoMode = "none") {
   const memos = exportMemos();
   const out = [];
   const files = [];
+  // 写真を縮めて書き出すとき（ZIP・写真を埋め込む JSON）
+  const qk = photoMode === "none" ? "orig" : exportPhotoQ();
+  const total = qk === "orig" ? 0 : memos.reduce((n, m) => n + (m.photoCount || 0), 0);
+  let done = 0, saved = 0;
   for (const m of memos) {
     const ph = (await DB.byIndex("photos", "memoId", m.id)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const photos = [];
     for (const [i, p] of ph.entries()) {
-      const mime = p.mime || p.blob.type || "image/jpeg";
+      const ex = qk === "orig" ? { blob: p.blob, mime: p.mime || p.blob.type || "image/jpeg", width: p.width, height: p.height } : await exportPhotoBlob(p, qk);
+      if (total) { done++; saved += p.blob.size - ex.blob.size; if (done % 3 === 0 || done === total) toast(`写真を縮めています… ${done}/${total}`, 60000); }
+      const mime = ex.mime;
       const filename = `memo${String(m.no).padStart(3, "0")}_${i + 1}.${extOf(mime)}`;
-      const o = { id: p.id, filename, file: `photos/${filename}`, mime, width: p.width, height: p.height, bytes: p.blob.size, takenAt: p.takenAt, origName: p.origName || null };
-      if (photoMode === "dataUrl") o.dataUrl = await blobToDataURL(p.blob);
-      if (photoMode === "file") files.push({ path: o.file, blob: p.blob, date: new Date(p.takenAt || m.createdAt) });
+      const o = { id: p.id, filename, file: `photos/${filename}`, mime, width: ex.width, height: ex.height, bytes: ex.blob.size, takenAt: p.takenAt, origName: p.origName || null };
+      if (ex.compressed) o.reduced = { quality: qk, origBytes: p.blob.size, origWidth: p.width, origHeight: p.height };
+      if (photoMode === "dataUrl") o.dataUrl = await blobToDataURL(ex.blob);
+      if (photoMode === "file") files.push({ path: o.file, blob: ex.blob, date: new Date(p.takenAt || m.createdAt) });
       photos.push(o);
     }
     const audios = [];
@@ -1729,9 +1840,11 @@ async function buildJSON(photoMode = "none") {
     }
     out.push({ ...memoOut(m), photos, audios });
   }
+  if (total) toast(`写真 ${total} 枚を${PHOTO_EXPORT_Q[qk].name}に縮めました（${fmtMB(Math.max(0, saved))} 小さく）`, 3000);
   const tracks = (await exportTracks()).map((t) => ({ ...t, pointFields: ["lat", "lon", "time_ms", "accuracy_m", "altitude_m"] }));
   return {
     format: "fieldnote", version: 1, exportedAt: nowIso(),
+    photoQuality: qk,
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
@@ -2265,7 +2378,8 @@ async function openMenu() {
         xrow("ZIP（JSON＋写真）", "おすすめ。写真・録音もファイルのまま入る", "zip"),
         xrow("JSON（全データ）", "1 つのテキストファイル", "json"),
         h("label", { class: "inline", style: "margin:8px 0 0;font-size:13.5px" }, inclPhotos, "JSON に写真を埋め込む（ファイルが大きくなります）"),
-        hint("ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。JSON は写真を埋め込んだ場合だけ写真も復元できます。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。iPhone では「共有」→「ファイルに保存」が確実です。")),
+        photoQualityPicker(),
+        hint("ZIP の中身：data.json（全データ）・memos.geojson・memos.csv・tracks.gpx・photos/（写真ファイル）。写真の画質を「元のまま」以外にすると、書き出す写真だけを縮めます（端末の写真はそのまま。縮めた写真は位置などの EXIF が消えますが、位置はメモに残っています）。写真が多くて ZIP が大きくなりすぎるときに。JSON は写真を埋め込んだ場合だけ写真も復元できます。端末内のデータはブラウザのデータ消去で失われるため、調査の区切りごとに書き出してください。iPhone では「共有」→「ファイルに保存」が確実です。")),
       sec("ほかのアプリ向け", "メモと軌跡を、よく使う形式で書き出す",
         xrow("GeoJSON", "QGIS などの GIS", "geojson"),
         xrow("CSV", "Excel などの表計算", "csv"),
@@ -2434,7 +2548,7 @@ function showViewer(idx) {
   V.url = URL.createObjectURL(photo.blob);
   const img = $("#v-img");
   img.src = V.url;
-  $("#v-stage").classList.remove("actual");
+  vzReset();
   const mb = (photo.blob.size / 1048576).toFixed(1);
   $("#v-title").textContent = `#${memo.no ?? ""} ${memo.title || (memo.kind === "photo" ? "写真" : "（無題）")}`;
   $("#v-meta").textContent = [fmtDate(photo.takenAt || memo.createdAt), `${photo.width}×${photo.height}`, `${mb} MB`,
@@ -2453,7 +2567,9 @@ function bindViewer() {
   $("#v-close").onclick = closeViewer;
   $("#v-prev").onclick = () => showViewer(V.idx - 1);
   $("#v-next").onclick = () => showViewer(V.idx + 1);
-  $("#v-stage").onclick = () => $("#v-stage").classList.toggle("actual"); // タップで等倍／全体
+  bindViewerZoom();
+  $("#v-zin").onclick = () => vzZoomAt(0, 0, VZ.s * 1.6);
+  $("#v-zout").onclick = () => vzZoomAt(0, 0, VZ.s / 1.6);
   $("#v-map").onclick = () => {
     const { memo } = V.items[V.idx];
     closeViewer();
@@ -2476,21 +2592,120 @@ function bindViewer() {
     const canShare = navigator.canShare && navigator.canShare({ files: [new File([photo.blob], name, { type: mime })] });
     deliverBlob(photo.blob, name, mime, canShare ? "share" : "download");
   };
-  let sx = null, sy = null;
-  const st = $("#v-stage");
-  st.addEventListener("touchstart", (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
-  st.addEventListener("touchend", (e) => {
-    if (sx == null || st.classList.contains("actual")) return;
-    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
-    sx = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && V.items.length > 1) showViewer(V.idx + (dx < 0 ? 1 : -1));
-  }, { passive: true });
   document.addEventListener("keydown", (e) => {
     if ($("#viewer").hidden) return;
     if (e.key === "Escape") closeViewer();
+    else if (e.key === "+" || e.key === "=") vzZoomAt(0, 0, VZ.s * 1.6);
+    else if (e.key === "-") vzZoomAt(0, 0, VZ.s / 1.6);
+    else if (e.key === "0") vzReset();
     else if (e.key === "ArrowLeft") showViewer(V.idx - 1);
     else if (e.key === "ArrowRight") showViewer(V.idx + 1);
   });
+}
+
+/* ---------- 写真の拡大：2 本指でつまむ・2 回タップ・ホイール・ボタン。拡大中は 1 本指で動かす ---------- */
+const VZ = { s: 1, x: 0, y: 0, ptrs: new Map(), g: null, tap: null, lastTap: null, tapT: 0 };
+/** 等倍（写真の 1 ピクセル＝画面の 1 ピクセル）の 3 倍まで。小さい写真でも 4 倍までは拡大できる */
+function vzMax() {
+  const img = $("#v-img");
+  const fit = img.clientWidth ? img.naturalWidth / img.clientWidth : 1;
+  return Math.max(4, Math.min(12, fit * 3));
+}
+function vzApply(anim = false) {
+  const img = $("#v-img"), st = $("#v-stage");
+  // 写真が画面からはみ出さないように（拡大しているときは端まで動かせる）
+  const mx = Math.max(0, (img.clientWidth * VZ.s - st.clientWidth) / 2), my = Math.max(0, (img.clientHeight * VZ.s - st.clientHeight) / 2);
+  VZ.x = Math.max(-mx, Math.min(mx, VZ.x));
+  VZ.y = Math.max(-my, Math.min(my, VZ.y));
+  img.style.transition = anim ? "transform .18s ease-out" : "none";
+  img.style.transform = `translate(${VZ.x}px, ${VZ.y}px) scale(${VZ.s})`;
+  st.classList.toggle("zoomed", VZ.s > 1.01);
+  $("#v-zoom").textContent = VZ.s > 1.01 ? `${Math.round(VZ.s * 100)}%` : "";
+}
+function vzReset(anim = false) { VZ.s = 1; VZ.x = 0; VZ.y = 0; vzApply(anim); }
+/** 画面の中心からの位置 (cx, cy) を動かさずに倍率を ns に */
+function vzZoomAt(cx, cy, ns, anim = true) {
+  ns = Math.max(1, Math.min(vzMax(), ns));
+  VZ.x = cx - ((cx - VZ.x) * ns) / VZ.s;
+  VZ.y = cy - ((cy - VZ.y) * ns) / VZ.s;
+  VZ.s = ns;
+  if (ns <= 1.001) { VZ.x = 0; VZ.y = 0; }
+  vzApply(anim);
+}
+function bindViewerZoom() {
+  const st = $("#v-stage");
+  const rel = (e) => { const r = st.getBoundingClientRect(); return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2]; };
+  st.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    st.setPointerCapture(e.pointerId);
+    VZ.ptrs.set(e.pointerId, rel(e));
+    if (VZ.ptrs.size === 2) {
+      const [a, b] = [...VZ.ptrs.values()];
+      VZ.g = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, m: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], s: VZ.s, x: VZ.x, y: VZ.y };
+      VZ.tap = null;
+    } else if (VZ.ptrs.size === 1) {
+      const p = rel(e);
+      VZ.g = { p, x: VZ.x, y: VZ.y };
+      VZ.tap = { p, t: Date.now(), moved: false };
+    }
+  });
+  st.addEventListener("pointermove", (e) => {
+    if (!VZ.ptrs.has(e.pointerId)) return;
+    const p = rel(e);
+    VZ.ptrs.set(e.pointerId, p);
+    if (VZ.ptrs.size === 2 && VZ.g?.d) {
+      const [a, b] = [...VZ.ptrs.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]), m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const ns = Math.max(1, Math.min(vzMax(), (VZ.g.s * d) / VZ.g.d));
+      // つまんだ点の下の写真の位置を指に合わせて動かす
+      VZ.x = m[0] - ((VZ.g.m[0] - VZ.g.x) * ns) / VZ.g.s;
+      VZ.y = m[1] - ((VZ.g.m[1] - VZ.g.y) * ns) / VZ.g.s;
+      VZ.s = ns;
+      vzApply();
+    } else if (VZ.ptrs.size === 1 && VZ.g?.p) {
+      const dx = p[0] - VZ.g.p[0], dy = p[1] - VZ.g.p[1];
+      if (VZ.tap && Math.hypot(dx, dy) > 8) VZ.tap.moved = true;
+      if (VZ.s > 1.01) { VZ.x = VZ.g.x + dx; VZ.y = VZ.g.y + dy; vzApply(); }
+    }
+  });
+  const end = (e) => {
+    if (!VZ.ptrs.has(e.pointerId)) return;
+    const p = rel(e);
+    VZ.ptrs.delete(e.pointerId);
+    if (VZ.ptrs.size === 1) { // 2 本指のあと 1 本残ったら、そこから動かす
+      const [q] = VZ.ptrs.values();
+      VZ.g = { p: q, x: VZ.x, y: VZ.y };
+      return;
+    }
+    if (VZ.ptrs.size) return;
+    if (VZ.s < 1.02) vzReset(true);
+    const tap = VZ.tap;
+    VZ.tap = null;
+    if (!tap) return;
+    const dx = p[0] - tap.p[0], dy = p[1] - tap.p[1];
+    // 拡大していないときの横スワイプで前後の写真
+    if (VZ.s <= 1.01 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && V.items.length > 1) { showViewer(V.idx + (dx < 0 ? 1 : -1)); return; }
+    if (tap.moved || Date.now() - tap.t > 400) return;
+    // 2 回タップ：その場所を 2.5 倍／元に戻す。1 回タップ：上下の帯を隠す・出す
+    if (VZ.lastTap && Date.now() - VZ.lastTap.t < 320 && Math.hypot(p[0] - VZ.lastTap.p[0], p[1] - VZ.lastTap.p[1]) < 40) {
+      clearTimeout(VZ.tapT);
+      VZ.lastTap = null;
+      if (VZ.s > 1.01) vzReset(true); else vzZoomAt(p[0], p[1], 2.5);
+      return;
+    }
+    VZ.lastTap = { p, t: Date.now() };
+    clearTimeout(VZ.tapT);
+    VZ.tapT = setTimeout(() => { VZ.lastTap = null; $("#viewer").classList.toggle("bare"); }, 330);
+  };
+  st.addEventListener("pointerup", end);
+  st.addEventListener("pointercancel", end);
+  st.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const [cx, cy] = rel(e);
+    vzZoomAt(cx, cy, VZ.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0025)), false);
+  }, { passive: false });
+  $("#v-img").addEventListener("load", () => vzApply());
+  window.addEventListener("resize", () => { if (!$("#viewer").hidden) vzApply(); });
 }
 
 /* ====================================================================
