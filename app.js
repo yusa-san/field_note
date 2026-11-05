@@ -844,6 +844,7 @@ function renderMarker(m) {
   });
   S.markers.set(m.id, mk);
   if (PIN.on) enablePinDrag(m.id, mk);
+  if (SH.on) shiftHookMarker(m.id, mk);
 }
 function popupHtml(m) {
   const d = S.pos ? `${fmtDist(distance(S.pos, m))} ${dirName(bearing(S.pos, m))}` : "";

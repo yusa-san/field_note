@@ -626,6 +626,12 @@ body.print-mode .cmp-bar, body.print-mode .cmp-info { display: none; }
 .pin-act { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
 .pin-act .btn { padding: 8px 18px; }
 body.pin-edit #status { visibility: hidden; }
+body.pin-shift .leaflet-marker-icon.memo-pin, body.pin-shift .leaflet-marker-icon.photo-pin { cursor: pointer; filter: none; opacity: 0.75; }
+body.pin-shift .leaflet-marker-icon.shift-sel { opacity: 1; filter: drop-shadow(0 0 0 #ff6d00) drop-shadow(0 0 3px #ff6d00) drop-shadow(0 0 3px #ff6d00); }
+.shift-info { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--fg-2); }
+.shift-pick { align-self: stretch; }
+body.pin-shift .pin-bar { gap: 6px; padding: 8px 10px; }
+.shift-cal { display: flex; align-items: center; font-size: 12px; gap: 6px; }
 body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.photo-pin { cursor: grab; filter: drop-shadow(0 0 4px #ff6d00); }
 .calib-cross { position: fixed; z-index: 550; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; pointer-events: none;
   background: linear-gradient(#d0021b, #d0021b) center / 2px 100% no-repeat, linear-gradient(#d0021b, #d0021b) center / 100% 2px no-repeat; border: 2px solid #d0021b; border-radius: 50%; }

@@ -86,19 +86,23 @@ function startPinEdit(focusId) {
   undoBtn.onclick = async () => {
     const u = PIN.undo.pop();
     if (!u) return;
-    await movePin(u.id, u.lat, u.lon, true);
+    for (const x of u.group || [u]) await movePin(x.id, x.lat, x.lon, true);
+    if (u.group) toast(`${u.group.length} 件を元の位置に戻しました`);
     undoBtn.disabled = !PIN.undo.length;
   };
   PIN.undoBtn = undoBtn;
   PIN.bar = h("div", { class: "pin-bar glass" },
-    h("div", { class: "pin-msg" }, h("b", {}, "ピンを動かす"), "ピンを長押しせずにそのままドラッグすると位置を直せます"),
-    h("div", { class: "pin-act" }, undoBtn, h("button", { type: "button", class: "btn primary", onclick: stopPinEdit }, "完了")));
+    h("div", { class: "pin-msg" }, h("b", {}, "ピンを動かす"), "ピンを長押しせずにそのままドラッグすると位置を直せます。GPS が同じようにずれていたメモは「まとめてずらす」で一度に直せます"),
+    h("div", { class: "pin-act" }, h("button", { type: "button", class: "chip", onclick: () => startShift() }, "まとめてずらす"), undoBtn, h("button", { type: "button", class: "btn primary", onclick: stopPinEdit }, "完了")));
   document.body.append(PIN.bar);
   if (focusId) { const m = S.memos.get(focusId); if (m) S.map.setView([m.lat, m.lon], Math.max(S.map.getZoom(), 18)); }
 }
 function enablePinDrag(id, mk) {
   if (!PIN.on || !mk.dragging) return;
   mk.dragging.enable();
+  // leaflet-rotate は「作ったときからドラッグ可」のマーカーにしか回転を考えた位置計算を入れない。
+  // 後からドラッグ可にすると、地図を回した状態で数十〜数百 m ずれて置かれるので、ここで入れ直す
+  if (S.map._rotate && !mk._fnRotDrag) { mk._initInteraction(); mk._fnRotDrag = true; }
   mk.off("dragend").on("dragend", async () => {
     const m = S.memos.get(id);
     if (!m) return;
@@ -115,7 +119,7 @@ async function movePin(id, lat, lon, isUndo = false) {
   if (m.origLat == null) { m.origLat = m.lat; m.origLon = m.lon; m.origSource = m.source || null; }
   m.lat = +lat.toFixed(7);
   m.lon = +lon.toFixed(7);
-  m.posEdited = !(m.lat === m.origLat && m.lon === m.origLon);
+  m.posEdited = Math.abs(m.lat - m.origLat) > 2e-7 || Math.abs(m.lon - m.origLon) > 2e-7;
   m.mesh = meshCode(m.lat, m.lon);
   m.updatedAt = nowIso();
   await DB.put("memos", m);
@@ -126,11 +130,129 @@ async function movePin(id, lat, lon, isUndo = false) {
 }
 function stopPinEdit() {
   if (!PIN.on) return;
+  if (SH.on) stopShift();
   PIN.on = false;
   document.body.classList.remove("pin-edit");
   for (const mk of S.markers.values()) if (mk.dragging) { mk.dragging.disable(); mk.off("dragend"); }
   PIN.bar?.remove();
   PIN.bar = null;
+}
+
+/* ====================================================================
+ * まとめてずらす：今の GPS の位置 → 中央の十字（本当の位置）の差を、選んだメモ全部に当てる
+ * ==================================================================== */
+const SH = { on: false, sel: new Set(), from: null, layer: null, bar: null, cross: null, raf: 0 };
+const M_LAT = 111320, mLon = (lat) => 111320 * Math.cos((lat * Math.PI) / 180);
+/** 中央の十字と GPS の点の差（北・東へ何 m） */
+function shiftDelta() {
+  const c = S.map.getCenter();
+  return { n: (c.lat - SH.from.lat) * M_LAT, e: (c.lng - SH.from.lon) * mLon(SH.from.lat) };
+}
+const shifted = (m, d) => ({ lat: m.lat + d.n / M_LAT, lon: m.lon + d.e / mLon(m.lat) });
+function startShift() {
+  if (!S.pos) {
+    toast("先に現在地を取得してください（現在地ボタン）。今いる場所の GPS のずれを、選んだメモにも当てます", 4000);
+    return;
+  }
+  if (!PIN.on) startPinEdit();
+  if (SH.on) return;
+  S.map.closePopup();
+  setFollow(false);
+  SH.on = true;
+  SH.sel = new Set();
+  SH.from = { lat: S.pos.lat, lon: S.pos.lon, acc: S.pos.acc };
+  document.body.classList.add("pin-shift");
+  PIN.bar.style.display = "none";
+  SH.layer = L.layerGroup().addTo(S.map);
+  for (const [id, mk] of S.markers) shiftHookMarker(id, mk);
+  SH.cross = h("div", { class: "calib-cross" });
+  const info = h("div", { class: "shift-info" });
+  const apply = h("button", { type: "button", class: "btn primary", disabled: true }, "ずらす");
+  const toCal = h("input", { type: "checkbox" });
+  const pick = (fn) => { for (const m of S.memos.values()) if (fn(m)) SH.sel.add(m.id); shiftRefresh(); };
+  const today = new Date().toDateString();
+  SH.bar = h("div", { class: "pin-bar glass" },
+    h("div", { class: "pin-msg" }, h("b", {}, "まとめてずらす"),
+      "十字を今いる本当の場所に合わせ、ずれていたピンを押して選ぶ"),
+    info,
+    h("div", { class: "seg seg-sm shift-pick" },
+      h("button", { type: "button", onclick: () => pick((m) => new Date(m.createdAt).toDateString() === today) }, "今日のメモ"),
+      h("button", { type: "button", onclick: () => { const b = S.map.getBounds(); pick((m) => b.contains([m.lat, m.lon])); } }, "画面内すべて"),
+      h("button", { type: "button", onclick: () => { SH.sel.clear(); shiftRefresh(); } }, "選択を解除")),
+    h("label", { class: "inline shift-cal" }, toCal, "この差を以後の GPS の補正にも使う"),
+    h("div", { class: "pin-act" },
+      h("button", { type: "button", class: "chip", onclick: stopShift }, "やめる"), apply));
+  apply.onclick = async () => {
+    const d = shiftDelta(), ids = [...SH.sel].filter((id) => S.memos.has(id));
+    if (!ids.length) return;
+    const group = ids.map((id) => { const m = S.memos.get(id); return { id, lat: m.lat, lon: m.lon }; });
+    for (const id of ids) { const m = S.memos.get(id), q = shifted(m, d); await movePin(id, q.lat, q.lon, true); }
+    PIN.undo.push({ group });
+    if (PIN.undoBtn) PIN.undoBtn.disabled = false;
+    if (toCal.checked) {
+      // 今の現在地はすでに補正済みのことがあるので、これまでの補正に足す
+      const o = gpsCfg().offset || { n: 0, e: 0 };
+      gpsSave({ offset: { n: Math.round((o.n + d.n) * 10) / 10, e: Math.round((o.e + d.e) * 10) / 10, at: nowIso() } });
+    }
+    stopShift();
+    toast(`${ids.length} 件を${fmtShift(d)}動かしました${toCal.checked ? "。GPS の補正にも設定しました" : ""}（「元に戻す」で戻せます）`, 4500);
+  };
+  SH.info = info; SH.apply = apply;
+  document.body.append(SH.cross, SH.bar);
+  S.map.setView([SH.from.lat, SH.from.lon], Math.max(S.map.getZoom(), 18), { animate: false });
+  S.map.on("move", shiftSchedule);
+  shiftRefresh();
+}
+function fmtShift(d) {
+  const ns = d.n >= 0 ? `北へ ${d.n.toFixed(1)} m` : `南へ ${(-d.n).toFixed(1)} m`;
+  const es = d.e >= 0 ? `東へ ${d.e.toFixed(1)} m` : `西へ ${(-d.e).toFixed(1)} m`;
+  return `${ns}・${es}（計 ${fmtDist(Math.hypot(d.n, d.e))}）`;
+}
+/** シフト中はピンを押すと選択（ポップアップは開かない） */
+function shiftHookMarker(id, mk) {
+  if (!SH.on) return;
+  if (mk.dragging) mk.dragging.disable();
+  mk.off("click", mk._openPopup, mk);
+  mk.off("click.shift");
+  const onTap = (e) => { L.DomEvent.stop(e); SH.sel.has(id) ? SH.sel.delete(id) : SH.sel.add(id); shiftRefresh(); };
+  mk._fnShiftTap = onTap;
+  mk.on("click", onTap);
+  mk._icon?.classList.toggle("shift-sel", SH.sel.has(id));
+}
+function shiftSchedule() { if (!SH.raf) SH.raf = requestAnimationFrame(() => { SH.raf = 0; shiftRefresh(); }); }
+function shiftRefresh() {
+  if (!SH.on) return;
+  const d = shiftDelta(), c = S.map.getCenter();
+  SH.layer.clearLayers();
+  // GPS の点（ずれの起点）と十字までの線
+  L.circleMarker([SH.from.lat, SH.from.lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#1a73e8", fillOpacity: 1, interactive: false }).addTo(SH.layer);
+  L.polyline([[SH.from.lat, SH.from.lon], c], { color: "#1a73e8", weight: 3, dashArray: "6 6", interactive: false }).addTo(SH.layer);
+  // 選んだメモの移動先の下見
+  for (const id of SH.sel) {
+    const m = S.memos.get(id);
+    if (!m) continue;
+    const q = shifted(m, d);
+    L.polyline([[m.lat, m.lon], [q.lat, q.lon]], { color: "#ff6d00", weight: 2, dashArray: "4 5", interactive: false }).addTo(SH.layer);
+    L.circleMarker([q.lat, q.lon], { radius: 6, color: "#ff6d00", weight: 2, fillColor: "#fff", fillOpacity: 0.9, interactive: false }).addTo(SH.layer);
+  }
+  for (const [id, mk] of S.markers) mk._icon?.classList.toggle("shift-sel", SH.sel.has(id));
+  SH.info.textContent = `GPS の点（青）→ 十字：${fmtShift(d)}`;
+  SH.apply.disabled = !SH.sel.size;
+  SH.apply.textContent = SH.sel.size ? `${SH.sel.size} 件をずらす` : "ずらす";
+}
+function stopShift() {
+  if (!SH.on) return;
+  SH.on = false;
+  S.map.off("move", shiftSchedule);
+  document.body.classList.remove("pin-shift");
+  SH.layer?.remove(); SH.cross?.remove(); SH.bar?.remove();
+  for (const [id, mk] of S.markers) {
+    if (mk._fnShiftTap) { mk.off("click", mk._fnShiftTap); mk._fnShiftTap = null; }
+    mk.off("click", mk._openPopup, mk).on("click", mk._openPopup, mk);
+    mk._icon?.classList.remove("shift-sel");
+    if (PIN.on && mk.dragging) mk.dragging.enable();
+  }
+  if (PIN.bar) PIN.bar.style.display = "";
 }
 
 /* ====================================================================
