@@ -450,6 +450,7 @@ function prDrawTracks(ctx, ext, r, k, lines) {
 function prMemosIn(ext) {
   const pad = Math.max(ext.w, ext.h) * 0.02;
   return [...S.memos.values()].filter((m) => {
+    if (!pinShown(m)) return false; // 「地図にピンを表示」に合わせる
     const [x, y] = toMerc(m.lat, m.lon);
     return x >= ext.minX - pad && x <= ext.maxX + pad && y >= ext.minY - pad && y <= ext.maxY + pad;
   }).sort((a, b) => (a.no || 0) - (b.no || 0));
@@ -459,7 +460,7 @@ async function prFeaturedImages(memos, k) {
   const out = new Map();
   for (const m of memos) {
     const ph = S.memoThumb.get(m.id);
-    if (!ph || !m.featured || photoPinsMode() === "none") continue;
+    if (!ph || !m.featured) continue;
     const feat = Math.min(4, Math.max(2, Number(m.featured) || 3));
     const ar = Math.min(2, Math.max(0.5, (ph.width || 4) / (ph.height || 3)));
     const w = 48 * feat * (ar >= 1 ? 1 : ar) * k, hh = 48 * feat * (ar >= 1 ? 1 / ar : 1) * k;
