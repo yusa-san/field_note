@@ -880,7 +880,7 @@ async function loadPopupThumb(m, el, popup) {
   photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const img = h("img", { src: thumbUrl(photos[0]), alt: "写真（タップで拡大）" });
   img.onload = () => popup.isOpen() && popup.update();
-  img.onclick = () => openViewer(photos.map((photo) => ({ photo, memo: m })), 0);
+  img.onclick = () => openPlayback([S.memos.get(m.id) || m], { photosOnly: true }); // 見返す画面（お気に入りも付けられる）
   box.replaceChildren(img);
   if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚（タップで表示）`));
 }
@@ -1101,9 +1101,9 @@ async function memoForm(memo, isNew, saved, dirty) {
   featCb.onchange = () => { if (featCb.checked && !featSize) featSize = 3; dirty = true; renderFeat(); };
   renderFeat();
   form.querySelector(".photo-row").after(h("div", { class: "feat-box" },
-    h("label", { class: "inline" }, featCb, "地図で大きく表示する（パース・キービジュアルなど）"),
+    h("label", { class: "inline" }, featCb, "お気に入り：地図で大きく表示する（パース・キービジュアルなど）"),
     featSeg,
-    h("div", { class: "note feat-note" }, "先頭の写真を、ほかの写真の 2〜4 倍の大きさで、どの縮尺でも地図に出します。")));
+    h("div", { class: "note feat-note" }, "先頭の写真を、ほかの写真の 2〜4 倍の大きさで、どの縮尺でも地図に出します。見返す画面の「お気に入り」と同じです。")));
   const addPhotos = async (input) => {
     const files = Array.from(input.files || []);
     input.value = "";
@@ -1469,7 +1469,7 @@ function openList() {
         lead,
         h("div", {},
           h("div", { class: "t" }, selecting ? h("i", { class: "dot-i", style: `background:${memoColor(m)}` }) : null, `#${m.no ?? ""} ${m.title || "（無題）"}`),
-          h("div", { class: "s" }, [m.category, m.owner ? `記録：${m.owner}` : "", fmtDate(m.createdAt), m.photoCount ? `写真${m.photoCount}` : "", m.audioCount ? `録音${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
+          h("div", { class: "s" }, [m.featured ? `お気に入り（${m.featured}倍）` : "", m.category, m.owner ? `記録：${m.owner}` : "", fmtDate(m.createdAt), m.photoCount ? `写真${m.photoCount}` : "", m.audioCount ? `録音${m.audioCount}` : "", (m.tags || []).map((t) => "#" + t).join(" ")].filter(Boolean).join("　")),
           m.note ? h("div", { class: "n" }, m.note) : null),
         dcell);
       item.onclick = (e) => {
@@ -1496,7 +1496,12 @@ function openList() {
   const syncTracks = () => (tracksBox.hidden = listState.view === "photos" || selecting);
   const render0 = render;
   render = () => { render0(); syncTracks(); };
-  const playBtn = h("button", { type: "button", class: "chip", onclick: () => openPlayback(shown.length ? shown : [...S.memos.values()]) }, "見返す");
+  // 見返す：一覧を番号順にしてから、今の表示（リスト＝メモ全部／写真＝写真だけ・絞り込みどおり）をその順で
+  const playBtn = h("button", { type: "button", class: "chip", onclick: () => {
+    if (sort.value !== "no") { sort.value = "no"; render(); }
+    if (!shown.length) return toast("見返すメモがありません");
+    openPlayback(shown, { photosOnly: listState.view === "photos" });
+  } }, "見返す");
   openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "list-tools" }, colorBySeg(() => render())), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
@@ -1515,7 +1520,7 @@ function renderGallery(box, memos, allPhotos) {
   const grid = h("div", { class: "gal" });
   items.forEach((it, i) => {
     const tile = h("button", { type: "button", class: "gal-tile" }, h("img", { src: thumbUrl(it.photo), alt: "", loading: "lazy" }), h("b", { style: `background:${memoColor(it.memo)}` }, `#${it.memo.no ?? ""}`));
-    tile.onclick = () => openViewer(items, i);
+    tile.onclick = () => openPlayback(memos, { photosOnly: true, startPhotoId: it.photo.id }); // 一覧と同じ順・同じ画面
     grid.append(tile);
   });
   box.append(grid);
@@ -2584,9 +2589,9 @@ function closeViewer() {
   V.url = null;
   if (V.opts.playback) {
     pbStop();
-    // 最後に見ていたメモの場所へ地図を寄せる
+    // 一覧から開いたときは一覧に戻る。地図から開いたときは、最後に見ていたメモの場所へ地図を寄せる
     const memo = V.items[V.idx]?.memo;
-    if (memo && S.memos.has(memo.id)) { setFollow(false); S.map.setView([memo.lat, memo.lon], Math.max(S.map.getZoom(), 16)); }
+    if ($("#sheet").hidden && memo && S.memos.has(memo.id)) { setFollow(false); S.map.setView([memo.lat, memo.lon], Math.max(S.map.getZoom(), 16)); }
   }
   $("#viewer").classList.remove("playback", "bare");
   $("#v-pb").hidden = true;
@@ -2599,13 +2604,17 @@ function closeViewer() {
  * 「お気に入り」を付けると、そのメモの「地図で大きく表示」をオンにする（初めは 3 倍）
  * ==================================================================== */
 const PB = { memos: [], favOnly: false, timer: 0, sec: 4 };
-async function openPlayback(memos = [...S.memos.values()], startId = null) {
-  PB.memos = memos.slice().sort((a, b) => (a.no || 0) - (b.no || 0));
+/**
+ * 見返す画面を開く。memos の順のまま（一覧の並び順。「見返す」ボタンは番号順にしてから呼ぶ）。
+ * photosOnly：写真だけ（写真の一覧・ピンのポップアップから）。startPhotoId：この写真から
+ */
+async function openPlayback(memos = [...S.memos.values()].sort((a, b) => (a.no || 0) - (b.no || 0)), { photosOnly = false, startPhotoId = null } = {}) {
+  PB.memos = memos.slice();
+  PB.photosOnly = photosOnly;
   PB.favOnly = false;
   const items = await pbItems();
-  if (!items.length) return toast("見返すメモがありません");
-  closeSheet(true);
-  const start = Math.max(0, startId ? items.findIndex((it) => it.memo.id === startId) : 0);
+  if (!items.length) return toast(photosOnly ? "写真がありません" : "見返すメモがありません");
+  const start = Math.max(0, startPhotoId ? items.findIndex((it) => it.photo?.id === startPhotoId) : 0);
   $("#viewer").classList.add("playback");
   $("#v-pb").hidden = false;
   openViewer(items, start, { playback: true });
@@ -2617,7 +2626,7 @@ async function pbItems() {
     if (PB.favOnly && !cur.featured) continue;
     const ph = (await DB.byIndex("photos", "memoId", m.id)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     if (ph.length) ph.forEach((photo, i) => items.push({ photo, memo: cur, pi: i, pn: ph.length }));
-    else if (!PB.favOnly) items.push({ photo: null, memo: cur });
+    else if (!PB.favOnly && !PB.photosOnly) items.push({ photo: null, memo: cur });
   }
   return items;
 }
@@ -2640,6 +2649,8 @@ function pbRender() {
     b.onclick = (e) => { e.stopPropagation(); pbSetFav(m, k); };
     return b;
   }) : []));
+  $("#v-favonly").hidden = PB.memos.length < 2;
+  $("#v-play").hidden = V.items.length < 2;
   $("#v-favonly").classList.toggle("on", PB.favOnly);
   $("#v-play").classList.toggle("on", !!PB.timer);
   $("#v-play").textContent = PB.timer ? "停止" : "自動再生";
@@ -2655,6 +2666,7 @@ async function pbSetFav(memo, k) {
   for (const it of V.items) if (it.memo.id === m.id) it.memo = m;
   renderMarker(m);
   pbRender();
+  listRefresh?.();
   toast(k ? `#${m.no} をお気に入りにしました（地図で ${k} 倍に表示）` : `#${m.no} をお気に入りから外しました`, 1800);
 }
 function pbStop() { clearInterval(PB.timer); PB.timer = 0; if (V.opts.playback && !$("#viewer").hidden) pbRender(); }
