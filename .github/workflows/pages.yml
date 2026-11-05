@@ -51,8 +51,14 @@ jobs:
           mkdir -p _site/data
           cp green/tokyo_green.pmtiles _site/data/
       - uses: actions/configure-pages@v5
+      # 「Re-run」すると同じ実行に同じ名前の成果物が増え、deploy-pages が
+      # 「Multiple artifacts named "github-pages"」で失敗するので、試行ごとに名前を変える
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+          name: github-pages-${{ github.run_attempt }}
       - id: deployment
         uses: actions/deploy-pages@v4
+        timeout-minutes: 10
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
