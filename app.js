@@ -2586,6 +2586,8 @@ function showViewer(idx) {
       memo.heading != null ? `撮影方向 ${memo.heading}°（${dirName(memo.heading)}）` : ""].filter(Boolean).join("　")
     : "写真のないメモ";
   $("#v-count").textContent = V.items.length > 1 ? `${V.idx + 1} / ${V.items.length}` : "";
+  $("#v-count").hidden = V.items.length < 2;
+  $("#v-jump")?.remove();
   $("#v-prev").hidden = $("#v-next").hidden = V.items.length < 2;
   $("#v-map").hidden = $("#v-edit").hidden = !!V.opts.readonly;
   $("#v-save").hidden = !photo;
@@ -2609,6 +2611,7 @@ function closeViewer() {
   }
   $("#viewer").classList.remove("playback", "bare");
   $("#v-catpick")?.remove();
+  $("#v-jump")?.remove();
   $("#v-pb").hidden = true;
   $("#v-img").hidden = false;
   $("#v-card").hidden = true;
@@ -2716,6 +2719,51 @@ function pbCatPicker(memo) {
   box.onclick = (e) => { if (e.target === box) close(); };
   $("#viewer").append(box);
 }
+/** 番号を指定して移動：順番（何枚目）・メモの番号（#）・つまみで */
+function vJumpPanel() {
+  if (V.items.length < 2) return;
+  if ($("#v-jump")) return $("#v-jump").remove();
+  pbStop();
+  const N = V.items.length;
+  const label = (i) => {
+    const it = V.items[i], m = S.memos.get(it.memo.id) || it.memo;
+    return `${i + 1} / ${N}　#${m.no ?? ""} ${m.title || "（無題）"}${it.pn > 1 ? `（写真 ${it.pi + 1}/${it.pn}）` : it.photo ? "" : "（写真なし）"}`;
+  };
+  const prev = h("div", { class: "vj-label" }, label(V.idx));
+  const slider = h("input", { type: "range", min: "1", max: String(N), step: "1", value: String(V.idx + 1), "aria-label": "順番" });
+  const pos = h("input", { type: "number", min: "1", max: String(N), value: String(V.idx + 1), inputmode: "numeric", enterkeyhint: "go" });
+  const cur = S.memos.get(V.items[V.idx].memo.id) || V.items[V.idx].memo;
+  const nos = [...new Set(V.items.map((it) => it.memo.no).filter((x) => x != null))];
+  const no = h("input", { type: "number", min: String(Math.min(...nos)), max: String(Math.max(...nos)), value: cur.no ?? "", inputmode: "numeric", enterkeyhint: "go" });
+  const close = () => box.remove();
+  const go = (i) => { close(); if (i !== V.idx) showViewer(i); };
+  slider.oninput = () => { prev.textContent = label(Number(slider.value) - 1); pos.value = slider.value; };
+  slider.onchange = () => go(Number(slider.value) - 1);
+  const goPos = () => {
+    const n = Math.round(Number(pos.value));
+    if (!(n >= 1 && n <= N)) return toast(`1〜${N} の数字を入れてください`);
+    go(n - 1);
+  };
+  const goNo = () => {
+    const n = Math.round(Number(no.value));
+    const i = V.items.findIndex((it) => it.memo.no === n);
+    if (i < 0) return toast(`#${no.value} は今見ている中にありません（絞り込みや「写真だけ」で外れているかもしれません）`, 3000);
+    go(i);
+  };
+  pos.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); goPos(); } };
+  no.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); goNo(); } };
+  pos.oninput = () => { const n = Math.round(Number(pos.value)); if (n >= 1 && n <= N) { slider.value = String(n); prev.textContent = label(n - 1); } };
+  no.oninput = () => { const i = V.items.findIndex((it) => it.memo.no === Math.round(Number(no.value))); if (i >= 0) prev.textContent = label(i); };
+  const box = h("div", { id: "v-jump", role: "dialog", "aria-label": "番号を指定して移動" },
+    h("div", { class: "vcp-panel" },
+      h("div", { class: "vcp-head" }, h("b", {}, "番号を指定して移動"), h("button", { type: "button", class: "v-btn", "aria-label": "閉じる", onclick: close }, "✕")),
+      prev, slider,
+      h("div", { class: "vj-rows" },
+        h("label", { class: "vj-row" }, h("span", {}, "順番"), pos, h("span", { class: "vj-unit" }, `/ ${N}`), h("button", { type: "button", class: "v-btn wide", onclick: goPos }, "移動")),
+        h("label", { class: "vj-row" }, h("span", {}, "メモ番号 #"), no, h("span", { class: "vj-unit" }), h("button", { type: "button", class: "v-btn wide", onclick: goNo }, "移動")))));
+  box.onclick = (e) => { if (e.target === box) close(); };
+  $("#viewer").append(box);
+}
 /** 上の帯の説明（日時・カテゴリなど）だけを書き直す（拡大はそのまま） */
 function vRefreshMeta() {
   const { photo, memo } = V.items[V.idx];
@@ -2765,6 +2813,7 @@ function bindViewer() {
   $("#v-play").onclick = pbToggleAuto;
   $("#v-favonly").onclick = pbToggleFavOnly;
   $("#v-first").onclick = () => showViewer(0);
+  $("#v-count").onclick = vJumpPanel;
   $("#v-prev").onclick = () => showViewer(V.idx - 1);
   $("#v-next").onclick = () => showViewer(V.idx + 1);
   bindViewerZoom();
@@ -2794,6 +2843,7 @@ function bindViewer() {
   };
   document.addEventListener("keydown", (e) => {
     if ($("#viewer").hidden) return;
+    if (e.target.closest?.("#v-jump, #v-catpick")) { if (e.key === "Escape") e.target.closest("#v-jump, #v-catpick").remove(); return; }
     if (e.key === "Escape") closeViewer();
     else if (e.key === "+" || e.key === "=") vzZoomAt(0, 0, VZ.s * 1.6);
     else if (e.key === "-") vzZoomAt(0, 0, VZ.s / 1.6);

@@ -307,7 +307,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .v-info { flex: 1; min-width: 0; }
 #v-title { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #v-meta { font-size: 12px; opacity: .85; }
-#v-count { font-size: 13px; font-variant-numeric: tabular-nums; }
+#v-count { font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; color: #fff; background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .3); border-radius: 999px; padding: 6px 12px; cursor: pointer; min-width: 64px; }
 .v-spacer { flex: 1; }
 .v-btn {
   border: 0; background: rgba(255, 255, 255, .18); color: #fff; border-radius: 999px;
@@ -700,3 +700,12 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #v-catpick .vcp-item i { width: 11px; height: 11px; border-radius: 50%; }
 #v-catpick .vcp-item.on { background: #f5b301; color: #1b1b1b; border-color: #f5b301; font-weight: 700; }
 #v-catpick .vcp-add { margin-top: 12px; border-style: dashed; }
+#v-jump { position: absolute; inset: 0; z-index: 5; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-end; justify-content: center; }
+#v-jump .vcp-panel { width: min(520px, 100%); background: #1d2421; color: #fff; border-radius: 16px 16px 0 0; padding: 12px 14px calc(var(--safe-bottom) + 14px); }
+#v-jump .vcp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#v-jump .vj-label { font-size: 13.5px; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#v-jump input[type=range] { width: 100%; margin: 4px 0 12px; accent-color: #f5b301; }
+#v-jump .vj-rows { display: grid; gap: 8px; }
+#v-jump .vj-row { display: grid; grid-template-columns: 6.5em 1fr 3.5em auto; align-items: center; gap: 8px; font-size: 14px; margin: 0; color: #fff; }
+#v-jump .vj-row input { width: 100%; font: inherit; font-size: 16px; padding: 7px 10px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .3); background: rgba(255, 255, 255, .08); color: #fff; }
+#v-jump .vj-unit { font-size: 13px; opacity: .8; }
