@@ -248,7 +248,7 @@ function stopShift() {
   SH.layer?.remove(); SH.cross?.remove(); SH.bar?.remove();
   for (const [id, mk] of S.markers) {
     if (mk._fnShiftTap) { mk.off("click", mk._fnShiftTap); mk._fnShiftTap = null; }
-    mk.off("click", mk._openPopup, mk).on("click", mk._openPopup, mk);
+    if (!mk._fnPhotoPin) mk.off("click", mk._openPopup, mk).on("click", mk._openPopup, mk); // 写真のピンは見返す画面のまま
     mk._icon?.classList.remove("shift-sel");
     if (PIN.on && mk.dragging) mk.dragging.enable();
   }

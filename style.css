@@ -688,3 +688,15 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 #v-fav-size { display: flex; gap: 4px; }
 #v-fav-size .v-btn.sz { min-width: 0; height: 32px; padding: 0 9px; font-size: 12.5px; }
 #viewer.playback #v-zout, #viewer.playback #v-zin, #viewer.playback #v-zoom, #viewer.playback #v-save { display: none; }
+#v-pb-text .pb-line2 { margin-top: 4px; }
+.pb-cat { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(255, 255, 255, .35); background: rgba(255, 255, 255, .12); color: #fff; border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.pb-cat i { width: 10px; height: 10px; border-radius: 50%; }
+.pb-cat .pb-caret { font-size: 11px; opacity: .75; border-left: 1px solid rgba(255, 255, 255, .3); padding-left: 6px; }
+#v-catpick { position: absolute; inset: 0; z-index: 5; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-end; justify-content: center; }
+#v-catpick .vcp-panel { width: min(520px, 100%); max-height: 70vh; overflow: auto; background: #1d2421; color: #fff; border-radius: 16px 16px 0 0; padding: 12px 14px calc(var(--safe-bottom) + 14px); }
+#v-catpick .vcp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#v-catpick .vcp-list { display: flex; flex-wrap: wrap; gap: 8px; }
+#v-catpick .vcp-item, #v-catpick .vcp-add { display: inline-flex; align-items: center; gap: 7px; border: 1px solid rgba(255, 255, 255, .3); background: rgba(255, 255, 255, .08); color: #fff; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+#v-catpick .vcp-item i { width: 11px; height: 11px; border-radius: 50%; }
+#v-catpick .vcp-item.on { background: #f5b301; color: #1b1b1b; border-color: #f5b301; font-weight: 700; }
+#v-catpick .vcp-add { margin-top: 12px; border-style: dashed; }

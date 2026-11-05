@@ -856,6 +856,15 @@ function renderMarker(m) {
     loadPopupThumb(cur, el, e.popup);
     loadPopupAudio(cur, el, e.popup);
   });
+  // 写真のピン（サムネイル・大きく表示）は、押すと見返す画面に（全メモを番号順に、この写真から）。小さいピンはこれまでどおりポップアップ
+  if (feat || (ph && S.thumbMode)) {
+    mk.off("click", mk._openPopup, mk);
+    mk.on("click", () => {
+      if (PIN.on || SH.on) return; // ピンを動かしている間は使わない
+      openPlayback(undefined, { startMemoId: m.id });
+    });
+    mk._fnPhotoPin = true;
+  }
   S.markers.set(m.id, mk);
   if (PIN.on) enablePinDrag(m.id, mk);
   if (SH.on) shiftHookMarker(m.id, mk);
@@ -880,7 +889,7 @@ async function loadPopupThumb(m, el, popup) {
   photos.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const img = h("img", { src: thumbUrl(photos[0]), alt: "写真（タップで拡大）" });
   img.onload = () => popup.isOpen() && popup.update();
-  img.onclick = () => openPlayback([S.memos.get(m.id) || m], { photosOnly: true }); // 見返す画面（お気に入りも付けられる）
+  img.onclick = () => { S.map.closePopup(); openPlayback(undefined, { startMemoId: m.id }); }; // 地図の写真のピンと同じ見返す画面
   box.replaceChildren(img);
   if (photos.length > 1) box.append(h("small", {}, `他 ${photos.length - 1} 枚（タップで表示）`));
 }
@@ -1500,7 +1509,7 @@ function openList() {
   const playBtn = h("button", { type: "button", class: "chip", onclick: () => {
     if (sort.value !== "no") { sort.value = "no"; render(); }
     if (!shown.length) return toast("見返すメモがありません");
-    openPlayback(shown, { photosOnly: listState.view === "photos" });
+    openPlayback(shown, { photosOnly: listState.view === "photos", resume: true });
   } }, "見返す");
   openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "list-tools" }, colorBySeg(() => render())), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
@@ -2580,7 +2589,12 @@ function showViewer(idx) {
   $("#v-prev").hidden = $("#v-next").hidden = V.items.length < 2;
   $("#v-map").hidden = $("#v-edit").hidden = !!V.opts.readonly;
   $("#v-save").hidden = !photo;
-  if (V.opts.playback) pbRender();
+  if (V.opts.playback) {
+    // 次に「見返す」で入ったとき、ここから続けられるように
+    Settings.data.pbLast = { memoId: memo.id, photoId: photo ? photo.id : null };
+    Settings.save();
+    pbRender();
+  }
 }
 function closeViewer() {
   $("#viewer").hidden = true;
@@ -2594,6 +2608,7 @@ function closeViewer() {
     if ($("#sheet").hidden && memo && S.memos.has(memo.id)) { setFollow(false); S.map.setView([memo.lat, memo.lon], Math.max(S.map.getZoom(), 16)); }
   }
   $("#viewer").classList.remove("playback", "bare");
+  $("#v-catpick")?.remove();
   $("#v-pb").hidden = true;
   $("#v-img").hidden = false;
   $("#v-card").hidden = true;
@@ -2605,16 +2620,26 @@ function closeViewer() {
  * ==================================================================== */
 const PB = { memos: [], favOnly: false, timer: 0, sec: 4 };
 /**
- * 見返す画面を開く。memos の順のまま（一覧の並び順。「見返す」ボタンは番号順にしてから呼ぶ）。
- * photosOnly：写真だけ（写真の一覧・ピンのポップアップから）。startPhotoId：この写真から
+ * 見返す画面を開く。memos の順のまま（一覧の並び順。「見返す」ボタンは番号順にしてから呼ぶ。省略時は全メモを番号順）。
+ * photosOnly：写真だけ（写真の一覧から）。startPhotoId：この写真から。startMemoId：このメモ（の先頭の写真）から。
+ * resume：前回の見返す画面で最後に見ていた写真・メモから（なければ先頭）
  */
-async function openPlayback(memos = [...S.memos.values()].sort((a, b) => (a.no || 0) - (b.no || 0)), { photosOnly = false, startPhotoId = null } = {}) {
+async function openPlayback(memos = [...S.memos.values()].sort((a, b) => (a.no || 0) - (b.no || 0)), { photosOnly = false, startPhotoId = null, startMemoId = null, resume = false } = {}) {
   PB.memos = memos.slice();
   PB.photosOnly = photosOnly;
   PB.favOnly = false;
   const items = await pbItems();
   if (!items.length) return toast(photosOnly ? "写真がありません" : "見返すメモがありません");
-  const start = Math.max(0, startPhotoId ? items.findIndex((it) => it.photo?.id === startPhotoId) : 0);
+  let start = 0;
+  const last = Settings.data.pbLast;
+  if (startPhotoId) start = items.findIndex((it) => it.photo?.id === startPhotoId);
+  else if (startMemoId) start = items.findIndex((it) => it.memo.id === startMemoId);
+  else if (resume && last) {
+    start = items.findIndex((it) => (last.photoId ? it.photo?.id === last.photoId : !it.photo && it.memo.id === last.memoId));
+    if (start < 0) start = items.findIndex((it) => it.memo.id === last.memoId); // 写真が消えたなど
+    if (start > 0) toast(`前回の続き（#${items[start].memo.no ?? ""}）から。最初に戻るには「最初から」`, 2500);
+  }
+  start = Math.max(0, start);
   $("#viewer").classList.add("playback");
   $("#v-pb").hidden = false;
   openViewer(items, start, { playback: true });
@@ -2634,10 +2659,14 @@ function pbRender() {
   const it = V.items[V.idx];
   const m = S.memos.get(it.memo.id) || it.memo;
   const note = (m.note || "").replace(/\s+/g, " ");
+  const catBtn = h("button", { type: "button", class: "pb-cat", "aria-label": "カテゴリを変える" }, h("i", { style: `background:${catColor(m.category)}` }), m.category || "カテゴリなし", h("span", { class: "pb-caret" }, "変える"));
+  catBtn.onclick = (e) => { e.stopPropagation(); pbCatPicker(m); };
   $("#v-pb-text").replaceChildren(
-    h("div", { class: "pb-line" }, h("i", { style: `background:${memoColor(m)}` }), h("b", {}, `#${m.no ?? ""} ${m.title || "（無題）"}`),
+    h("div", { class: "pb-line" }, h("b", {}, `#${m.no ?? ""} ${m.title || "（無題）"}`),
       it.pn > 1 ? h("span", { class: "pb-sub" }, `写真 ${it.pi + 1}/${it.pn}`) : null),
+    h("div", { class: "pb-line2" }, catBtn),
     it.photo && note ? h("div", { class: "pb-note" }, note) : "");
+  $("#v-first").hidden = V.idx === 0;
   const fav = $("#v-fav"), size = $("#v-fav-size");
   // お気に入り（＝地図で大きく表示）は写真のあるメモだけ
   fav.hidden = !it.photo;
@@ -2654,6 +2683,48 @@ function pbRender() {
   $("#v-favonly").classList.toggle("on", PB.favOnly);
   $("#v-play").classList.toggle("on", !!PB.timer);
   $("#v-play").textContent = PB.timer ? "停止" : "自動再生";
+}
+/** 見返す画面からカテゴリを変える */
+function pbCatPicker(memo) {
+  pbStop();
+  $("#v-catpick")?.remove();
+  const close = () => box.remove();
+  const choose = async (c) => {
+    const m = S.memos.get(memo.id);
+    if (!m) return close();
+    if (m.category !== c) {
+      m.category = c;
+      m.updatedAt = nowIso();
+      await DB.put("memos", m);
+      for (const it of V.items) if (it.memo.id === m.id) it.memo = m;
+      renderMarker(m);
+      updateCounts();
+      listRefresh?.();
+      toast(`#${m.no} のカテゴリを「${c}」にしました`, 1600);
+    }
+    close();
+    pbRender();
+    vRefreshMeta();
+  };
+  const cats = Settings.data.categories.slice();
+  if (memo.category && !cats.includes(memo.category)) cats.push(memo.category);
+  const box = h("div", { id: "v-catpick", role: "dialog", "aria-label": "カテゴリを選ぶ" },
+    h("div", { class: "vcp-panel" },
+      h("div", { class: "vcp-head" }, h("b", {}, `#${memo.no ?? ""} のカテゴリ`), h("button", { type: "button", class: "v-btn", "aria-label": "閉じる", onclick: close }, "✕")),
+      h("div", { class: "vcp-list" }, ...cats.map((c) => h("button", { type: "button", class: "vcp-item" + (c === memo.category ? " on" : ""), onclick: () => choose(c) }, h("i", { style: `background:${catColor(c)}` }), c))),
+      h("button", { type: "button", class: "vcp-add", onclick: () => { const n = prompt("新しいカテゴリの名前"); const c = catAdd(n); if (c) choose(c); } }, "＋ 新しいカテゴリ")));
+  box.onclick = (e) => { if (e.target === box) close(); };
+  $("#viewer").append(box);
+}
+/** 上の帯の説明（日時・カテゴリなど）だけを書き直す（拡大はそのまま） */
+function vRefreshMeta() {
+  const { photo, memo } = V.items[V.idx];
+  const m = S.memos.get(memo.id) || memo;
+  if (photo) $("#v-meta").textContent = [fmtDate(photo.takenAt || m.createdAt), m.category || "", m.heading != null ? `撮影方向 ${m.heading}°（${dirName(m.heading)}）` : ""].filter(Boolean).join("　");
+  else {
+    const cat = $("#v-card .vc-cat");
+    if (cat) cat.replaceChildren(h("i", { style: `background:${memoColor(m)}` }), m.category || "");
+  }
 }
 /** お気に入りにする／外す。k：大きさ（2〜4 倍）。null で外す */
 async function pbSetFav(memo, k) {
@@ -2693,6 +2764,7 @@ function bindViewer() {
   $("#v-fav").onclick = () => { const m = S.memos.get(V.items[V.idx].memo.id); if (m) pbSetFav(m, m.featured ? null : 3); };
   $("#v-play").onclick = pbToggleAuto;
   $("#v-favonly").onclick = pbToggleFavOnly;
+  $("#v-first").onclick = () => showViewer(0);
   $("#v-prev").onclick = () => showViewer(V.idx - 1);
   $("#v-next").onclick = () => showViewer(V.idx + 1);
   bindViewerZoom();
