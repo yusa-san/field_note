@@ -101,9 +101,19 @@
       <button id="v-fav" class="v-btn wide" type="button">お気に入り</button>
       <span id="v-fav-size"></span>
       <span class="v-spacer"></span>
-      <button id="v-first" class="v-btn wide" type="button">最初から</button>
-      <button id="v-favonly" class="v-btn wide" type="button">お気に入りだけ</button>
-      <button id="v-play" class="v-btn wide" type="button">自動再生</button>
+      <div class="v-mode" role="group" aria-label="再生モード">
+        <span class="v-mode-lab">再生モード</span>
+        <button id="v-first" class="v-ico" type="button" title="最初から" aria-label="最初から">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14" /><path d="M18 6l-9 6 9 6z" /></svg>
+        </button>
+        <button id="v-favonly" class="v-ico" type="button" title="お気に入りだけ" aria-label="お気に入りだけ" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg>
+        </button>
+        <button id="v-play" class="v-ico" type="button" title="自動再生" aria-label="自動再生" aria-pressed="false">
+          <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+          <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13M16 5.5v13" /></svg>
+        </button>
+      </div>
     </div>
   </div>
   <div class="v-top">
