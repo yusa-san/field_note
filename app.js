@@ -917,7 +917,7 @@ function renderMarker(m) {
   const mk = L.marker([m.lat, m.lon], { icon, riseOnHover: true, zIndexOffset: feat ? 500 + feat * 100 : ph ? 100 : 0 });
   mk._fnMemoId = m.id;
   if (clShows(m.id)) mk.addTo(S.map); // まとめて隠しているピンは置かない
-  mk.bindPopup("", { maxWidth: 260, autoPanPaddingTopLeft: [10, 110], autoPanPaddingBottomRight: [60, 90] });
+  mk.bindPopup("", { maxWidth: 290, autoPanPaddingTopLeft: [10, 110], autoPanPaddingBottomRight: [60, 90] });
   mk.on("popupopen", (e) => {
     const cur = S.memos.get(m.id) || m;
     const el = h("div", { html: popupHtml(cur) });
@@ -1577,12 +1577,12 @@ function openList() {
   const render0 = render;
   render = () => { render0(); syncTracks(); };
   // 見返す：一覧を番号順にしてから、今の表示（リスト＝メモ全部／写真＝写真だけ・絞り込みどおり）をその順で
-  const playBtn = h("button", { type: "button", class: "chip", onclick: () => {
+  const playBtn = h("button", { type: "button", class: "chip", "data-guide": "list-play", onclick: () => {
     if (sort.value !== "no") { sort.value = "no"; render(); }
     if (!shown.length) return toast("見返すメモがありません");
     openPlayback(shown, { photosOnly: listState.view === "photos", resume: true });
   } }, "見返す");
-  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools" }, q), h("div", { class: "list-tools" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "opt-rows list-opt" }, colorBySeg(() => render()), pinsSeg()), list, tracksBox, bar), {
+  openSheet(`メモ一覧（${S.memos.size}件）`, h("div", {}, h("div", { class: "list-tools", "data-guide": "list-tabs" }, tabList, tabPhotos, playBtn, h("span", { style: "flex:1" }), selBtn), h("div", { class: "list-tools", "data-guide": "list-q" }, q), h("div", { class: "list-tools", "data-guide": "list-filter" }, cat, sort, catEditBtn), catMgrBox, h("div", { class: "opt-rows list-opt", "data-guide": "list-opt" }, colorBySeg(() => render()), pinsSeg()), list, tracksBox, bar), {
     onClose: () => (listRefresh = null),
   });
   render();
@@ -1721,7 +1721,7 @@ function toggleMeasure() {
   S.measure = { pts: [], line: L.polyline([], { color: "#ff6d00", weight: 3, dashArray: "6 6" }).addTo(S.map), poly: null, marks: [] };
   $("#btn-measure").classList.add("active");
   $("#measure-bar").hidden = false;
-  $("#btn-add-center span").textContent = "中心を計測点に";
+  $("#btn-add-center span").textContent = "中心を追加";
   if (!S.crosshair) toast("地図をタップして点を追加。十字線を出すと中心で追加も可");
   updateMeasure();
 }
@@ -2550,7 +2550,7 @@ async function openMenu() {
   const last = Settings.data.lastExportAt;
   const TABS = [["save", "保存・印刷"], ["load", "読み込み"], ["settings", "設定"]];
   // 見出し付きのまとまり（カード）・長い説明は畳む
-  const sec = (title, sub, ...kids) => h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, title), sub ? h("p", {}, sub) : null), ...kids);
+  const sec = (title, sub, ...kids) => h("section", { class: "msec", "data-sec": title }, h("div", { class: "msec-h" }, h("h3", {}, title), sub ? h("p", {}, sub) : null), ...kids); // data-sec：使い方の案内で探す目印（英語表示でも変わらない）
   const sub = (t) => h("div", { class: "msec-sub" }, t);
   const hint = (t) => h("details", { class: "hint" }, h("summary", {}, "くわしく"), h("p", {}, t));
   const xrow = (label, desc, kind) => h("div", { class: "xrow" },
@@ -2558,7 +2558,7 @@ async function openMenu() {
     h("div", { class: "xbtn" },
       h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "download", inclPhotos.checked) }, "保存"),
       canShare ? h("button", { class: "btn secondary", type: "button", onclick: () => doExport(kind, "share", inclPhotos.checked) }, "共有") : null));
-  const stat = (n, unit, label) => h("div", { class: "stat" }, h("b", {}, String(n)), h("small", {}, `${unit}・${label}`));
+  const stat = (n, unit, label) => h("div", { class: "stat" }, h("b", {}, n.toLocaleString()), h("small", {}, label)); // 単位は数字の意味から分かるので見出しだけ
   const dirty = !$("#unsaved-badge").hidden;
   const panes = {
     save: h("div", {},
@@ -2596,8 +2596,8 @@ async function openMenu() {
       sec("地点をまとめて入力", "「緯度, 経度, 名称」を 1 行ずつ貼り付けてメモにする", bulkPointsBox()),
       sec("写真をまとめて読み込む", "撮影位置（位置情報）付きの写真から、その場所に写真メモを作る", exifImportBox()),
       sec("地図に重ねる", "メモにはせず、地図の上に表示だけする",
-        sub("ファイルから"),
-        h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "GeoJSON・KML・.gsf・GeoParquet・基盤地図情報"),
+        sub("ファイルから（GeoJSON・KML・.gsf・GeoParquet・基盤地図情報）"),
+        h("button", { class: "btn secondary block", type: "button", onclick: openImImport }, "ファイルを選ぶ"),
         sub("API・オープンデータから"),
         h("div", { class: "menu-grid" },
           h("button", { class: "btn secondary", type: "button", onclick: openReinfoSheet }, "不動産情報ライブラリ"),
@@ -2619,12 +2619,11 @@ async function openMenu() {
         h("label", { class: "inline", style: "margin-top:10px" }, openForm, "撮影後にメモ入力を開く"),
         h("label", {}, "録音から書き起こすモデル（端末内で処理）", asrSel),
         h("label", { class: "inline", style: "margin-top:10px" }, autoTr, "その場で文字にできなかった録音は、録音後に自動で書き起こす")),
-      sec("使い方", "記録・メモ一覧・見返す・保存/設定などの案内",
-        h("button", { class: "btn secondary block", type: "button", onclick: () => { closeSheet(true); openGuide(0); } }, "使い方の案内をもう一度見る")),
       sec("詳細設定", null,
         h("label", {}, "PDF を URL で読み込むときの CORS プロキシ（任意・{url} が元の URL に置き換わる）", proxyIn)),
       h("div", { class: "msave" }, h("button", { class: "btn primary block", type: "button", onclick: saveSettings }, "設定を保存")),
-      sec("使い方", null,
+      sec("使い方", "記録・メモ一覧・見返す・保存/設定などの案内",
+        h("button", { class: "btn secondary block", type: "button", style: "margin:0 0 12px", onclick: () => { closeSheet(true); openGuide(0); } }, "使い方の案内をもう一度見る"),
         h("p", { class: "note", style: "margin:0" },
           "画面の長押しでその地点にメモ／十字線ボタンで中心十字線を表示し、十字線の位置にメモ／「撮影」で写真を撮るとその場所に写真メモができ、地図上にサムネイルが出ます（ズーム15以上）。座標は WGS84（世界測地系）の緯度経度。標高は国土地理院の標高タイル（1m があればその値、なければ 5m・10m）または標高 API による値で、GPS高度とは別に記録されます。")),
       h("section", { class: "msec danger-zone" }, h("div", { class: "msec-h" }, h("h3", {}, "データの消去"), h("p", {}, "メモ・写真・録音・軌跡を端末から消します（元に戻せません）")),
