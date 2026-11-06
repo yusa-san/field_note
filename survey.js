@@ -69,12 +69,16 @@ function chooseImportMode(data, fileName) {
     const add = h("button", { type: "button", class: "btn primary block" }, "ほかの人のデータとして追加する");
     add.onclick = () => { const n = name.value.trim(); if (!n) return name.focus(); done({ mode: "add", owner: n }); };
     const merge = h("button", { type: "button", class: "btn secondary block", style: "margin-top:8px" }, "自分のデータとして統合する（バックアップから戻す）");
-    merge.onclick = () => done({ mode: "merge" });
+    const hasSettings = !!(data.settings && Object.keys(data.settings).length);
+    const withSet = h("input", { type: "checkbox", checked: true });
+    merge.onclick = () => done({ mode: "merge", settings: withSet.checked });
     openSheet("取り込み方を選ぶ", h("div", {},
       h("p", { class: "note", style: "margin-top:0" }, `メモ ${memos.length} 件${data.tracks?.length ? `・軌跡 ${data.tracks.length} 本` : ""}${guess ? `（記録者：${guess}）` : ""}${sameIds ? `。うち ${sameIds} 件は今のデータと同じメモです` : ""}`),
       h("section", { class: "msec" + (looksOther || !sameIds ? " pick" : "") }, h("div", { class: "msec-h" }, h("h3", {}, "ほかの人のデータとして追加"), h("p", {}, "今のメモは変えずに、すべて新しいメモとして追加します。番号は続きから振り直し、記録者の名前を付けます（記録者ごとに色分けできます）。同じファイルをもう一度取り込んでも二重にはなりません。")),
         h("label", {}, "記録者の名前", name), add),
-      h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, "自分のデータとして統合"), h("p", {}, "自分の書き出し（別の端末・バックアップ）を戻すとき用。同じメモは更新日時が新しい方を残します。")), merge)), { onClose: () => resolve(null) });
+      h("section", { class: "msec" }, h("div", { class: "msec-h" }, h("h3", {}, "自分のデータとして統合"), h("p", {}, "自分の書き出し（別の端末・バックアップ）を戻すとき用。同じメモは更新日時が新しい方を残します。")),
+        hasSettings ? h("label", { class: "inline", style: "margin:4px 0 0;font-size:13.5px" }, withSet, "設定も読み込む（カテゴリの並び・色、色分け、地図のピン、写真の大きさなど）") : null,
+        merge)), { onClose: () => resolve(null) });
   });
 }
 

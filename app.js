@@ -834,6 +834,8 @@ function openLayers() {
  * ==================================================================== */
 async function loadMemos() {
   const list = await DB.all("memos");
+  // メモにあるのに一覧にないカテゴリ（別の端末で作ったものなど）は一覧に足す
+  catEnsure(list.map((m) => m.category));
   S.memos.clear();
   for (const m of list) S.memos.set(m.id, m);
   S.memoThumb.clear();
@@ -1184,6 +1186,9 @@ async function memoForm(memo, isNew, saved, dirty) {
   const addPhotos = async (input) => {
     const files = Array.from(input.files || []);
     input.value = "";
+    await addPhotoFiles(files);
+  };
+  const addPhotoFiles = async (files) => {
     for (const file of files) {
       try {
         const p = await processPhoto(file);
@@ -1197,6 +1202,44 @@ async function memoForm(memo, isNew, saved, dirty) {
   };
   f.photoCam.onchange = () => addPhotos(f.photoCam);
   f.photoPick.onchange = () => addPhotos(f.photoPick);
+  // 画像の貼り付け（スクリーンショットなど）：Ctrl+V／「貼り付け」ボタン（クリップボードを読む）／読めない端末は貼り付け欄を長押し
+  const pastedFile = (b) => {
+    const ext = (b.type.split("/")[1] || "png").replace("jpeg", "jpg").replace(/\+.*$/, "");
+    const name = b.name && !/^image\.\w+$/i.test(b.name) ? b.name : `貼り付けた画像_${stamp()}.${ext}`;
+    return new File([b], name, { type: b.type || "image/png", lastModified: Date.now() });
+  };
+  const pasteBox = form.querySelector(".memo-paste");
+  pasteBox.dataset.ph = "ここを長押し（PC はクリックして Ctrl+V）→「貼り付け」";
+  pasteBox.addEventListener("input", () => (pasteBox.textContent = "")); // 文字は入れない
+  const onPaste = (e) => {
+    if (!form.isConnected) return;
+    const imgs = [...(e.clipboardData?.files || [])].filter((x) => x.type.startsWith("image/"));
+    if (!imgs.length) for (const it of e.clipboardData?.items || []) if (it.kind === "file" && it.type.startsWith("image/")) { const x = it.getAsFile(); if (x) imgs.push(x); }
+    if (!imgs.length) {
+      if (e.target === pasteBox) { e.preventDefault(); toast("貼り付けた内容に画像がありません"); }
+      return; // 文字の貼り付けはそのまま
+    }
+    e.preventDefault();
+    pasteBox.hidden = true;
+    addPhotoFiles(imgs.map(pastedFile)).then(() => toast(`画像を ${imgs.length} 枚貼り付けました`));
+  };
+  document.addEventListener("paste", onPaste);
+  form.querySelector('[data-act="paste"]').onclick = async () => {
+    const fallback = (msg) => { pasteBox.hidden = false; pasteBox.focus(); toast(msg, 4000); };
+    if (!navigator.clipboard?.read) return fallback("下の欄を長押しして「貼り付け」してください");
+    try {
+      const blobs = [];
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith("image/"));
+        if (type) blobs.push(await item.getType(type));
+      }
+      if (!blobs.length) return toast("クリップボードに画像がありません（画像やスクリーンショットをコピーしてから押してください）", 3500);
+      await addPhotoFiles(blobs.map(pastedFile));
+      toast(`画像を ${blobs.length} 枚貼り付けました`);
+    } catch (e) {
+      fallback(e.name === "NotAllowedError" ? "クリップボードの読み取りが許可されませんでした。下の欄を長押しして「貼り付け」してください" : "貼り付けできませんでした。下の欄を長押しして「貼り付け」してください");
+    }
+  };
 
   // 聞き取り（録音・書き起こし）
   const existingAudios = isNew ? [] : await DB.byIndex("audios", "memoId", memo.id);
@@ -1274,7 +1317,7 @@ async function memoForm(memo, isNew, saved, dirty) {
 
   openSheet(isNew ? "新しいメモ" : `メモ #${memo.no}`, form, {
     guard: () => !dirty || saved || confirm(voice.isActive() ? "録音中です。録音と入力内容を破棄しますか？" : "入力内容を破棄しますか？"),
-    onClose: () => voice.dispose(),
+    onClose: () => { voice.dispose(); document.removeEventListener("paste", onPaste); },
   });
   if (isNew) setTimeout(() => f.title.focus({ preventScroll: true }), 250);
 }
@@ -1943,11 +1986,73 @@ async function buildJSON(photoMode = "none") {
     format: "fieldnote", version: 1, exportedAt: nowIso(),
     photoQuality: qk,
     project: { name: Settings.data.project || null, observer: Settings.data.observer || null, categories: Settings.data.categories },
+    settings: exportSettings(), // カテゴリの並び・色、表示の設定など（中継サーバの URL は入れない）
     crs: "EPSG:4326 (WGS84 / JGD2011 相当)",
     memos: out, tracks,
     overlays: EXPORT_SEL ? [] : await pdfLayersForExport(photoMode, files),
     files, // 呼び出し側で取り除く（JSON には書かない）
   };
+}
+/* ---------- 設定の書き出し・読み込み（別の端末でも同じカテゴリ・表示にする） ---------- */
+/** 書き出す設定。端末ごとのもの（GPS の補正・見返しの続き・最終書き出し）や、地図に重ねるデータの状態は入れない */
+const SETTINGS_EXPORT_KEYS = ["categories", "catColors", "ownerColors", "colorBy", "mapPins", "clusterMode", "project", "observer",
+  "photoSize", "cameraOpenForm", "voiceMode", "asrModel", "autoTranscribe", "exportPhotoQ", "print"];
+/** URL（中継サーバ・Workers など）とその類いは書き出さない */
+function settingsStripUrls(v) {
+  if (typeof v === "string") return /^\s*https?:\/\//i.test(v) || /\.workers\.dev/i.test(v) ? undefined : v;
+  if (Array.isArray(v)) return v.map(settingsStripUrls).filter((x) => x !== undefined);
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (/proxy|url|endpoint|worker|token|apikey/i.test(k)) continue;
+      const y = settingsStripUrls(x);
+      if (y !== undefined) o[k] = y;
+    }
+    return o;
+  }
+  return v;
+}
+function exportSettings() {
+  const out = {};
+  for (const k of SETTINGS_EXPORT_KEYS) {
+    if (Settings.data[k] === undefined || Settings.data[k] === null || Settings.data[k] === "") continue;
+    const v = settingsStripUrls(JSON.parse(JSON.stringify(Settings.data[k])));
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+/**
+ * 読み込んだファイルの設定を当てる
+ * - restore（自分のデータとして統合）：カテゴリはファイルの並び順を先に、こちらにだけあるものは後ろに。ほかの設定はファイルのものにする
+ * - add（ほかの人のデータとして追加）：足りないカテゴリと記録者の色だけ足す（こちらの設定は変えない）
+ * どちらでも、メモにあるのに一覧にないカテゴリは足す（設定のない古いファイルでも）
+ */
+function applyImportedSettings(data, memos, mode) {
+  const st = data.settings && typeof data.settings === "object" ? settingsStripUrls(data.settings) : {};
+  const fileCats = (Array.isArray(st.categories) ? st.categories : Array.isArray(data.project?.categories) ? data.project.categories : []).filter((c) => typeof c === "string" && c);
+  const colors = st.catColors && typeof st.catColors === "object" ? st.catColors : {};
+  let changed = 0;
+  if (mode === "restore" && fileCats.length) {
+    const local = Settings.data.categories;
+    const next = [...fileCats, ...local.filter((c) => !fileCats.includes(c))];
+    if (next.join("\n") !== local.join("\n")) changed++;
+    Settings.data.categories = next;
+    for (const c of fileCats) if (colors[c] && Settings.data.catColors[c] !== colors[c]) { Settings.data.catColors[c] = colors[c]; changed++; }
+    for (const k of SETTINGS_EXPORT_KEYS) {
+      if (k === "categories" || k === "catColors" || st[k] === undefined) continue;
+      if (k === "ownerColors") { Settings.data.ownerColors = { ...(Settings.data.ownerColors || {}), ...st.ownerColors }; continue; }
+      if (JSON.stringify(Settings.data[k]) !== JSON.stringify(st[k])) { Settings.data[k] = st[k]; changed++; }
+    }
+  } else {
+    changed += catEnsure(fileCats, colors);
+    if (st.ownerColors && typeof st.ownerColors === "object") {
+      const oc = (Settings.data.ownerColors ||= {});
+      for (const [n, c] of Object.entries(st.ownerColors)) if (!oc[n]) oc[n] = c;
+    }
+  }
+  changed += catEnsure(memos.map((m) => m.category), colors);
+  Settings.save();
+  return changed;
 }
 async function buildJSONText(photoMode) {
   const { files, ...data } = await buildJSON(photoMode);
@@ -2226,7 +2331,7 @@ async function importData(data, getPhotoBlob, kind = "ファイル") {
   const asOther = choice.mode === "add", owner = choice.owner;
   const busy = busyOpen(`${kind}を読み込んでいます`, "読み込みが終わるまで、この画面を閉じたり、ほかのアプリに切り替えたり、画面を消したりしないでください。途中で止まったときは、同じファイルをもう一度読み込めば続きから入ります（入ったメモは二重になりません）。");
   try {
-    return await importDataRun(data, memos, getPhotoBlob, asOther, owner, busy);
+    return await importDataRun(data, memos, getPhotoBlob, asOther, owner, busy, choice.settings !== false);
   } catch (e) {
     busyClose();
     await loadMemos().catch(() => {});
@@ -2235,7 +2340,7 @@ async function importData(data, getPhotoBlob, kind = "ファイル") {
     busyClose();
   }
 }
-async function importDataRun(data, memos, getPhotoBlob, asOther, owner, busy) {
+async function importDataRun(data, memos, getPhotoBlob, asOther, owner, busy, withSettings = true) {
   let added = 0, updated = 0, skipped = 0, photos = 0, failed = 0;
   // 進み具合：メモ 1 件・写真 1 枚・録音 1 件をそれぞれ 1 として数える（写真は重いので 4）
   const W_PH = 4;
@@ -2328,6 +2433,8 @@ async function importDataRun(data, memos, getPhotoBlob, asOther, owner, busy) {
     Settings.data.project = data.project.name;
     Settings.save();
   }
+  // 設定（カテゴリの並び・色など）
+  const setChanged = applyImportedSettings(data, memos, asOther ? "add" : withSettings ? "restore" : "cats");
   const oAdded = Array.isArray(data.overlays) ? await importPdfLayers(data.overlays, getPhotoBlob) : 0;
   busy.set(0.99, "地図に並べています…");
   await breathe();
@@ -2336,7 +2443,7 @@ async function importDataRun(data, memos, getPhotoBlob, asOther, owner, busy) {
   if (typeof dataLegendUpdate === "function") dataLegendUpdate();
   busy.set(1, "読み込みました");
   busyClose();
-  alert(`読み込み完了${asOther ? `（${owner} さんのデータとして追加）` : ""}\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped}${asOther ? "（取り込み済み）" : ""} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}${failed ? `\n読み込めなかった写真 ${failed} 枚（壊れているか、端末の空きが足りない可能性があります）` : ""}${orphans ? `\nメモのない写真・録音 ${orphans} 件を片付けました` : ""}`);
+  alert(`読み込み完了${asOther ? `（${owner} さんのデータとして追加）` : ""}\n追加 ${added} 件 / 更新 ${updated} 件 / スキップ ${skipped}${asOther ? "（取り込み済み）" : ""} 件\n写真 ${photos} 枚 / 軌跡 ${tAdded} 本${oAdded ? ` / 重ねた地図 ${oAdded} 枚` : ""}${failed ? `\n読み込めなかった写真 ${failed} 枚（壊れているか、端末の空きが足りない可能性があります）` : ""}${orphans ? `\nメモのない写真・録音 ${orphans} 件を片付けました` : ""}${setChanged ? `\n設定（カテゴリなど）を ${setChanged} か所更新しました` : ""}`);
 }
 
 /** メモのない写真・録音（読み込みが途中で止まったときなどに残る。どこにも出ず容量だけ使う）を消す */

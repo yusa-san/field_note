@@ -4,7 +4,7 @@
  *   ふつうに取るとリロードしても古い app.js が出る。必ずサーバーに確かめる（no-cache：変わっていなければ 304 で軽い）
  * - 地図タイル: キャッシュ優先。表示したタイルは自動で端末に残す（上限あり）
  */
-const VERSION = "v32";
+const VERSION = "v33";
 const SHELL = `fn-shell-${VERSION}`;
 const TILES_RT = "fn-tiles-rt";      // 自動キャッシュ（古いものから削除）
 const TILES_SAVED = "fn-tiles-saved"; // 「表示範囲を保存」で明示的に保存したもの

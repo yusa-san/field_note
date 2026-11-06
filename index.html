@@ -163,7 +163,9 @@
         <label class="btn secondary file-btn">画像を選んで追加
           <input name="photoPick" type="file" accept="image/*" multiple hidden>
         </label>
+        <button type="button" class="btn secondary file-btn" data-act="paste">貼り付け</button>
       </div>
+      <div class="paste-box memo-paste" contenteditable="true" role="textbox" aria-label="画像の貼り付け欄" inputmode="none" hidden></div>
       <div class="photo-thumbs"></div>
     </div>
     <label class="inline"><input name="useHeading" type="checkbox"> 撮影方向（端末の向き）を記録 <span class="heading-val"></span></label>
