@@ -918,3 +918,8 @@ html:lang(en) .menu-grid { grid-template-columns: 1fr; }
   #viewer:not(.playback) #v-zoom { display: none; } /* 倍率の表示は省き、＋と−だけを右端に縦に並べる */
   #viewer:not(.playback) #v-zin { bottom: calc(100% + 54px); }
 }
+/* メモの写真：撮影・画像を選ぶ・貼り付けの 3 つを 1 行に */
+.photo-btns { grid-template-columns: 1.1fr 1.25fr 0.9fr; }
+.memo-paste { margin-top: 8px; }
+@media (max-width: 400px) { .photo-btns .file-btn { font-size: 12.5px !important; padding: 11px 4px; } }
+#toast { width: max-content; max-width: min(90vw, 520px); } /* left:50% のままだと幅が画面の半分に縮むので */

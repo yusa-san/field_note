@@ -29,6 +29,18 @@ async function catRewriteMemos(from, to) {
   }
   updateCounts();
 }
+/** メモにあるのに一覧にないカテゴリを足す（別の端末で作ったカテゴリ・読み込んだデータ）。colors：書き出したファイルの色 */
+function catEnsure(names, colors = {}) {
+  let added = 0;
+  for (const n of names) {
+    if (!n || typeof n !== "string" || Settings.data.categories.includes(n)) continue;
+    Settings.data.categories.push(n);
+    Settings.data.catColors[n] = (colors && colors[n]) || Settings.data.catColors[n] || catNextColor();
+    added++;
+  }
+  if (added) Settings.save();
+  return added;
+}
 function catAdd(name) {
   name = (name || "").trim();
   if (!name) return null;
