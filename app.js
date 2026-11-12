@@ -1996,7 +1996,7 @@ async function buildJSON(photoMode = "none") {
 /* ---------- 設定の書き出し・読み込み（別の端末でも同じカテゴリ・表示にする） ---------- */
 /** 書き出す設定。端末ごとのもの（GPS の補正・見返しの続き・最終書き出し）や、地図に重ねるデータの状態は入れない */
 const SETTINGS_EXPORT_KEYS = ["categories", "catColors", "ownerColors", "colorBy", "mapPins", "clusterMode", "project", "observer",
-  "photoSize", "cameraOpenForm", "voiceMode", "asrModel", "autoTranscribe", "exportPhotoQ", "print"];
+  "photoSize", "cameraOpenForm", "voiceMode", "asrModel", "autoTranscribe", "exportPhotoQ", "print", "pbSec"];
 /** URL（中継サーバ・Workers など）とその類いは書き出さない */
 function settingsStripUrls(v) {
   if (typeof v === "string") return /^\s*https?:\/\//i.test(v) || /\.workers\.dev/i.test(v) ? undefined : v;
@@ -2876,7 +2876,7 @@ function showViewer(idx) {
   $("#v-jump")?.remove();
   $("#v-prev").hidden = $("#v-next").hidden = V.items.length < 2;
   $("#v-map").hidden = $("#v-edit").hidden = !!V.opts.readonly;
-  $("#v-save").hidden = !photo;
+  $("#v-save").hidden = $("#v-copy").hidden = !photo;
   if (V.opts.playback) {
     // 次に「見返す」で入ったとき、ここから続けられるように
     Settings.data.pbLast = { memoId: memo.id, photoId: photo ? photo.id : null };
@@ -2908,6 +2908,8 @@ function closeViewer() {
  * 「お気に入り」を付けると、そのメモの「地図で大きく表示」をオンにする（初めは 3 倍）
  * ==================================================================== */
 const PB = { memos: [], favOnly: false, timer: 0, sec: 4 };
+const PB_SPEEDS = [2, 3, 4, 6, 8, 12]; // 自動再生の間隔（秒）
+const pbSec = () => (PB_SPEEDS.includes(Number(Settings.data.pbSec)) ? Number(Settings.data.pbSec) : 4);
 /**
  * 見返す画面を開く。memos の順のまま（一覧の並び順。「見返す」ボタンは番号順にしてから呼ぶ。省略時は全メモを番号順）。
  * photosOnly：写真だけ（写真の一覧から）。startPhotoId：この写真から。startMemoId：このメモ（の先頭の写真）から。
@@ -2975,6 +2977,10 @@ function pbRender() {
   $("#v-favonly").setAttribute("aria-pressed", PB.favOnly ? "true" : "false");
   $("#v-play").classList.toggle("on", !!PB.timer);
   $("#v-play").setAttribute("aria-pressed", PB.timer ? "true" : "false");
+  const sp = $("#v-speed");
+  sp.textContent = `${pbSec()}秒`;
+  sp.disabled = V.items.length < 2;
+  sp.setAttribute("aria-label", `自動再生の間隔：${pbSec()} 秒（押すと変わる）`);
   const playLab = PB.timer ? "自動再生を止める" : "自動再生";
   $("#v-play").title = playLab;
   $("#v-play").setAttribute("aria-label", playLab);
@@ -3080,16 +3086,66 @@ async function pbSetFav(memo, k) {
   listRefresh?.();
   toast(k ? `#${m.no} をお気に入りにしました（地図で ${k} 倍に表示）` : `#${m.no} をお気に入りから外しました`, 1800);
 }
+/**
+ * 表示中の写真をクリップボードにコピーする。できるだけ元の画素数のまま。
+ * クリップボードに入れられる画像は PNG だけのブラウザが多いので、PNG にする（JPEG は向きを直して描き直す）。
+ * 端末の上限（iPhone の canvas は約 1,670 万画素）を超えるときだけ、その範囲に縮める
+ */
+function vCopyImage() {
+  const photo = V.items[V.idx]?.photo;
+  if (!photo) return;
+  if (!navigator.clipboard?.write || !window.ClipboardItem) return toast("このブラウザは画像のコピーに対応していません。右上の保存を使ってください", 3500);
+  let info = null;
+  // Safari は押した操作の中で ClipboardItem を作る必要があるので、画像は Promise で渡す
+  const png = photoToPng(photo).then((r) => { info = r; return r.blob; });
+  navigator.clipboard.write([new ClipboardItem({ "image/png": png })]).then(
+    () => toast(`画像をコピーしました（${info.w.toLocaleString()}×${info.h.toLocaleString()} px${info.reduced ? "・端末の上限まで縮小" : ""}）`, 2600),
+    (e) => toast(e?.name === "NotAllowedError" ? "クリップボードへの書き込みが許可されませんでした" : "コピーできませんでした。右上の保存を使ってください", 3500));
+}
+async function photoToPng(photo) {
+  const blob = photo.blob;
+  if ((photo.mime || blob.type) === "image/png") return { blob, w: photo.width || 0, h: photo.height || 0, reduced: false };
+  let src, close = () => {};
+  try { src = await createImageBitmap(blob, { imageOrientation: "from-image" }); close = () => src.close?.(); }
+  catch { const r = await loadImage(blob); src = r.img; close = () => URL.revokeObjectURL(r.url); }
+  try {
+    const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight;
+    const MAXPX = 16_000_000, k = Math.min(1, Math.sqrt(MAXPX / (w0 * h0)));
+    const w = Math.round(w0 * k), h = Math.round(h0 * k);
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(src, 0, 0, w, h);
+    const out = await new Promise((r, j) => cv.toBlob((b) => (b ? r(b) : j(new Error("PNG にできませんでした"))), "image/png"));
+    cv.width = cv.height = 0;
+    return { blob: out, w, h, reduced: k < 1 };
+  } finally { close(); }
+}
 function pbStop() { clearInterval(PB.timer); PB.timer = 0; if (V.opts.playback && !$("#viewer").hidden) pbRender(); }
 function pbToggleAuto() {
   if (PB.timer) return pbStop();
   if (V.idx >= V.items.length - 1) showViewer(0); // 最後で押したら最初から
+  pbStartTimer();
+  pbRender();
+}
+function pbStartTimer() {
+  clearInterval(PB.timer);
+  PB.sec = pbSec();
   PB.timer = setInterval(() => {
     if (VZ.s > 1.01) return; // 拡大して見ている間は進めない
     if (V.idx >= V.items.length - 1) return pbStop();
     showViewer(V.idx + 1);
   }, PB.sec * 1000);
+}
+/** 自動再生の間隔を変える（押すたびに 2 → 3 → 4 → 6 → 8 → 12 秒 → 2 秒…）。再生中なら新しい間隔で続ける */
+function pbNextSpeed() {
+  const i = PB_SPEEDS.indexOf(pbSec());
+  Settings.data.pbSec = PB_SPEEDS[(i + 1) % PB_SPEEDS.length];
+  Settings.save();
+  if (PB.timer) pbStartTimer();
   pbRender();
+  toast(`自動再生の間隔：${pbSec()} 秒`, 1400);
 }
 async function pbToggleFavOnly() {
   const curId = V.items[V.idx]?.memo.id;
@@ -3126,6 +3182,8 @@ function bindViewer() {
     const m = S.memos.get(memo.id);
     if (m) openMemoForm(m);
   };
+  $("#v-copy").onclick = () => vCopyImage();
+  $("#v-speed").onclick = (e) => { e.stopPropagation(); pbNextSpeed(); };
   $("#v-save").onclick = () => {
     // iPhone は共有シートの「画像を保存」で写真アプリへ、Android は共有またはダウンロード
     const { photo, memo } = V.items[V.idx];
