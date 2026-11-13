@@ -690,7 +690,7 @@ body.pin-edit .leaflet-marker-icon.memo-pin, body.pin-edit .leaflet-marker-icon.
 .v-btn.on { background: #f5b301; color: #1b1b1b; font-weight: 700; }
 #v-fav-size { display: flex; gap: 4px; }
 #v-fav-size .v-btn.sz { min-width: 0; height: 32px; padding: 0 9px; font-size: 12.5px; }
-#viewer.playback #v-zout, #viewer.playback #v-zin, #viewer.playback #v-zoom, #viewer.playback #v-save { display: none; }
+#viewer.playback #v-zout, #viewer.playback #v-zin, #viewer.playback #v-zoom { display: none; }
 #v-pb-text .pb-line2 { margin-top: 4px; }
 .pb-cat { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(255, 255, 255, .35); background: rgba(255, 255, 255, .12); color: #fff; border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .pb-cat i { width: 10px; height: 10px; border-radius: 50%; }
@@ -923,3 +923,11 @@ html:lang(en) .menu-grid { grid-template-columns: 1fr; }
 .memo-paste { margin-top: 8px; }
 @media (max-width: 400px) { .photo-btns .file-btn { font-size: 12.5px !important; padding: 11px 4px; } }
 #toast { width: max-content; max-width: min(90vw, 520px); } /* left:50% のままだと幅が画面の半分に縮むので */
+
+/* 写真を見る画面：右上のコピー・保存（アイコン） */
+.v-btn.v-icon { display: grid; place-items: center; padding: 0; flex: none; }
+.v-btn.v-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.v-btn.v-icon:disabled { opacity: .45; }
+/* 自動再生の間隔 */
+.v-speed { flex: none; min-width: 44px; height: 30px; margin-left: 2px; padding: 0 8px; border: 1px solid rgba(255, 255, 255, .35); border-radius: 999px; background: transparent; color: #fff; font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
+.v-speed:disabled { opacity: .35; cursor: default; }

@@ -121,11 +121,18 @@
           <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
           <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13M16 5.5v13" /></svg>
         </button>
+        <button id="v-speed" class="v-speed" type="button" title="自動再生の間隔（押すと変わる）" aria-label="自動再生の間隔">4秒</button>
       </div>
     </div>
   </div>
   <div class="v-top">
     <div class="v-info"><div id="v-title"></div><div id="v-meta"></div></div>
+    <button id="v-copy" class="v-btn v-icon" type="button" title="画像をコピー（元の画素数のまま）" aria-label="画像をコピー">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></svg>
+    </button>
+    <button id="v-save" class="v-btn v-icon" type="button" title="画像を保存（元のファイルのまま）" aria-label="画像を保存">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>
+    </button>
     <button id="v-close" class="v-btn" aria-label="閉じる">✕</button>
   </div>
   <div class="v-bottom">
@@ -136,7 +143,6 @@
     <button id="v-zout" class="v-btn" aria-label="縮小">−</button>
     <span id="v-zoom"></span>
     <button id="v-zin" class="v-btn" aria-label="拡大">+</button>
-    <button id="v-save" class="v-btn wide">保存</button>
     <button id="v-map" class="v-btn wide">地図</button>
     <button id="v-edit" class="v-btn wide">メモ</button>
   </div>
